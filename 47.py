@@ -28,7 +28,7 @@ import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from solana.rpc.async_api import AsyncClient
-from solana.keypair import Keypair
+from solders.keypair import Keypair
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8152282783:AAH0ylvc63x_u1e15ST0-4zjQe_K4b4bVRc")
