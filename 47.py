@@ -11,7 +11,6 @@ Features:
 import os
 import json
 import logging
-import asyncio
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from telegram import Update, BotCommand
@@ -20,7 +19,7 @@ from solana.rpc.async_api import AsyncClient
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8152282783:AAH0ylvc63x_u1e15ST0-4zjQe_K4b4bVRc")
-KEYPAIR_PATH = os.getenv("KEYPAIR_PATH", "./id.json")  # default to local id.json
+KEYPAIR_PATH = os.getenv("KEYPAIR_PATH", "./id.json")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
 # --- LOGGING ---
@@ -31,7 +30,6 @@ logger = logging.getLogger(__name__)
 try:
     with open(KEYPAIR_PATH, "r") as f:
         secret_list = json.load(f)
-    # Reconstruct keypair from 64-byte secret
     secret_bytes = bytes(secret_list)
     keypair = Keypair.from_bytes(secret_bytes)
     WALLET_PUBKEY = Pubkey.from_string(str(keypair.pubkey()))
@@ -48,9 +46,7 @@ client = AsyncClient(SOLANA_RPC_URL)
 
 # --- COMMAND HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        '⚡️ VortexTrader is online!\nType /help to see commands.'
-    )
+    await update.message.reply_text('⚡️ VortexTrader is online!\nType /help to see commands.')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     commands = [
@@ -63,9 +59,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("snipe", "(coming soon) Snipe token"),
         ("sell", "(coming soon) Sell tokens")
     ]
-    text = "Available commands:\n"
-    for cmd, desc in commands:
-        text += f"/{cmd} — {desc}\n"
+    text = "Available commands:\n" + "\n".join(f"/{c} — {d}" for c, d in commands)
     await update.message.reply_text(text)
 
 async def wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,15 +75,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Error fetching balance.")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        resp = await client.get_balance(WALLET_PUBKEY)
-        sol = resp.value / 1e9
-        await update.message.reply_text(
-            f"Wallet: {WALLET_PUBKEY}\nSOL Balance: {sol:.6f} SOL"
-        )
-    except Exception as e:
-        logger.error(f"Status error: {e}")
-        await update.message.reply_text("Error fetching status.")
+    await update.message.reply_text(f"Wallet: {WALLET_PUBKEY}\nSOL Balance: {(await client.get_balance(WALLET_PUBKEY)).value / 1e9:.6f} SOL")
 
 async def launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("/launch not implemented yet. Coming soon 🔧")
@@ -100,34 +86,32 @@ async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("/sell not implemented yet. Coming soon 🔧")
 
-# --- MAIN FUNCTION ---
-async def main():
+# --- ENTRY POINT ---
+def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     # Register commands
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("wallets", wallets))
-    app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("launch", launch))
-    app.add_handler(CommandHandler("snipe", snipe))
-    app.add_handler(CommandHandler("sell", sell))
-
-    # Set command menu in Telegram UI
-    await app.bot.set_my_commands([
+    for cmd, handler in [
+        ("start", start),
+        ("help", help_command),
+        ("wallets", wallets),
+        ("balance", balance),
+        ("status", status),
+        ("launch", launch),
+        ("snipe", snipe),
+        ("sell", sell),
+    ]:
+        app.add_handler(CommandHandler(cmd, handler))
+    # Set Telegram UI menu
+    app.bot.set_my_commands([
         BotCommand("start", "Welcome message"),
         BotCommand("help", "List commands"),
         BotCommand("wallets", "Show wallet public key"),
         BotCommand("balance", "Show SOL balance"),
-        BotCommand("status", "Wallet + balance summary")
+        BotCommand("status", "Wallet + balance summary"),
     ])
-
     logger.info("Starting VortexTrader bot...")
-    await app.run_polling()
+    # Blocking call, no extra asyncio.run
+    app.run_polling()
 
-# --- ENTRY POINT ---
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    finally:
-        asyncio.run(client.close())
+    main()
