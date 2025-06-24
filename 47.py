@@ -70,7 +70,7 @@ async def help_command(update, context):
     text = "Available commands:\n" + "\n".join(f"/{c} — {d}" for c, d in cmds)
     await update.message.reply_text(text)
 
-# **Registration**
+# Registration
 async def register_start(update, ctx):
     await update.message.reply_text("Send your Solana public key to link:")
     return REGISTER
@@ -93,7 +93,7 @@ async def register_cancel(update, ctx):
     await update.message.reply_text("Registration canceled.")
     return ConversationHandler.END
 
-# **Wallet Info**
+# Wallet Info
 async def wallets(update, ctx):
     data = load_data().get(str(update.effective_user.id))
     if data:
@@ -130,7 +130,7 @@ async def status(update, ctx):
     sol = bal.value / 1e9
     await update.message.reply_text(f"Wallet: `{data['wallet']}`\nSOL: {sol:.6f} SOL", parse_mode="Markdown")
 
-# **Market Commands**
+# Market Commands
 async def scan(update, ctx):
     tokens = await get_potential_10x_tokens()
     if not tokens:
@@ -149,7 +149,10 @@ async def topgainers(update, ctx):
     async with httpx.AsyncClient() as client:
         response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=priceChange.h24&order=desc&limit=10")
         data = response.json()
-        tokens = data['tokens']
+        tokens = data.get('tokens', [])
+        if not tokens:
+            await update.message.reply_text("No top gainers found.")
+            return
         text = "Top gainers:\n"
         for t in tokens:
             symbol = t['symbol']
@@ -165,14 +168,14 @@ async def price(update, ctx):
     async with httpx.AsyncClient() as client:
         response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
         data = response.json()
-        if not data['tokens']:
+        if not data.get('tokens'):
             await update.message.reply_text("Token not found.")
             return
         token = data['tokens'][0]
         price = token['priceUsd']
         await update.message.reply_text(f"Price of {token['symbol']}: ${price}")
 
-# **Analysis and Trade Suggestions**
+# Analysis and Trade Suggestions
 async def launch(update, ctx):
     if len(ctx.args) != 2:
         return await update.message.reply_text("Usage: /launch <symbol> <mint>")
@@ -181,7 +184,7 @@ async def launch(update, ctx):
     async with httpx.AsyncClient() as client:
         response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
         data = response.json()
-        if not data['tokens']:
+        if not data.get('tokens'):
             await update.message.reply_text("Token not found on DEX Screener.")
             return
         token = data['tokens'][0]
@@ -210,8 +213,11 @@ async def snipe(update, ctx):
     pump_time = await analyze_pumpfun_optimal(mint)
     if pump_time != "N/A":
         # Suggest entry shortly after launch
-        entry_time = datetime.strptime(pump_time, '%H:%M:%S UTC') + timedelta(minutes=5)
-        await update.message.reply_text(f"Snipe on pump.fun at {entry_time.strftime('%H:%M:%S UTC')}")
+        try:
+            entry_time = datetime.strptime(pump_time, '%H:%M:%S UTC') + timedelta(minutes=5)
+            await update.message.reply_text(f"Snipe on pump.fun at {entry_time.strftime('%H:%M:%S UTC')}")
+        except ValueError:
+            await update.message.reply_text("Error parsing pump.fun launch time.")
         return
     # Check bullx.io
     bullx_price = await analyze_bullxio_optimal(mint)
@@ -231,7 +237,7 @@ async def sell(update, ctx):
     async with httpx.AsyncClient() as client:
         response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
         data = response.json()
-        if not data['tokens']:
+        if not data.get('tokens'):
             await update.message.reply_text("Token not found.")
             return
         token = data['tokens'][0]
@@ -245,33 +251,41 @@ async def sell(update, ctx):
         )
         await update.message.reply_text(text)
 
-# **Risk Settings**
+# Risk Settings
 async def set_slippage(update, ctx):
     if not ctx.args:
         return await update.message.reply_text("Usage: /set_slippage <percent>")
-    val = float(ctx.args[0])
-    uid = str(update.effective_user.id)
-    d = load_data()
-    d[uid]['slippage'] = val
-    save_data(d)
-    await update.message.reply_text(f"Slippage set to {val}%")
+    try:
+        val = float(ctx.args[0])
+        uid = str(update.effective_user.id)
+        d = load_data()
+        d[uid]['slippage'] = val
+        save_data(d)
+        await update.message.reply_text(f"Slippage set to {val}%")
+    except ValueError:
+        await update.message.reply_text("Please provide a valid number.")
 
 async def set_stoploss(update, ctx):
     if not ctx.args:
         return await update.message.reply_text("Usage: /set_stoploss <percent>")
-    val = float(ctx.args[0])
-    uid = str(update.effective_user.id)
-    d = load_data()
-    d[uid]['stoploss'] = val
-    save_data(d)
-    await update.message.reply_text(f"Stop-loss set to {val}%")
+    try:
+        val = float(ctx.args[0])
+        uid = str(update.effective_user.id)
+        d = load_data()
+        d[uid]['stoploss
 
-# **Helper Functions**
+'] = val
+        save_data(d)
+        await update.message.reply_text(f"Stop-loss set to {val}%")
+    except ValueError:
+        await update.message.reply_text("Please provide a valid number.")
+
+# Helper Functions
 async def get_potential_10x_tokens():
     async with httpx.AsyncClient() as client:
         response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=volume.h24&order=desc&limit=100")
         data = response.json()
-        tokens = data['tokens']
+        tokens = data.get('tokens', [])
         # Filter for potential 10x: high volume and recent price surge
         potential = [
             t for t in tokens
@@ -284,7 +298,7 @@ async def analyze_pumpfun_optimal(mint):
     try:
         async with httpx.AsyncClient() as c:
             j = (await c.get(f"https://api.pump.fun/v1/launches/{mint}")).json()
-            lt = datetime.fromisoformat(j['launch_time'])
+            lt = datetime.fromisoformat(j['launch_time'].replace('Z', '+00:00'))
             return (lt + timedelta(seconds=30)).strftime('%H:%M:%S UTC')
     except:
         return "N/A"
@@ -292,5 +306,66 @@ async def analyze_pumpfun_optimal(mint):
 async def analyze_bullxio_optimal(mint):
     try:
         async with httpx.AsyncClient() as c:
-            j = (await c.get(f"https://api.bullxio.com/orderbook/{mint}")).json()
-            bids = j.get('bids
+            j = (await c.get(f"https://api.bullx.io/orderbook/{mint}")).json()
+            bids = j.get('bids', [])
+            td = j.get('total_depth', 0)
+            cs = 0
+            for pr, sz in bids:
+                cs += sz
+                if td and cs >= td * 0.01:
+                    return f"{pr} (~1% slip)"
+            return "market"
+    except:
+        return "N/A"
+
+# Main
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    conv = ConversationHandler(
+        entry_points=[CommandHandler('register', register_start)],
+        states={REGISTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive)]},
+        fallbacks=[CommandHandler('cancel', register_cancel)]
+    )
+    handlers = [
+        CommandHandler('start', start),
+        CommandHandler('help', help_command),
+        conv,
+        CommandHandler('wallets', wallets),
+        CommandHandler('balance', balance),
+        CommandHandler('portfolio', portfolio),
+        CommandHandler('history', history),
+        CommandHandler('status', status),
+        CommandHandler('scan', scan),
+        CommandHandler('topgainers', topgainers),
+        CommandHandler('price', price),
+        CommandHandler('launch', launch),
+        CommandHandler('snipe', snipe),
+        CommandHandler('sell', sell),
+        CommandHandler('set_slippage', set_slippage),
+        CommandHandler('set_stoploss', set_stoploss)
+    ]
+    for h in handlers:
+        app.add_handler(h)
+    app.bot.set_my_commands([BotCommand(c[0], c[1]) for c in [
+        ('start', 'Welcome'),
+        ('help', 'Commands'),
+        ('register', 'Link wallet'),
+        ('wallets', 'Show wallet'),
+        ('balance', 'SOL balance'),
+        ('portfolio', 'Token portfolio'),
+        ('history', 'Recent TXs'),
+        ('status', 'Summary'),
+        ('scan', 'Potential 10x tokens'),
+        ('topgainers', 'Top gainers'),
+        ('price', 'Token price'),
+        ('launch', 'Analyze'),
+        ('snipe', 'Entry suggestion'),
+        ('sell', 'Selling info'),
+        ('set_slippage', 'Max slippage'),
+        ('set_stoploss', 'Stop-loss')
+    ]])
+    logger.info("🚀 UltimateTraderBot online")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
