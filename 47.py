@@ -7,7 +7,7 @@ Features:
  - Real-time token discovery (/scan, /topgainers, /price)
  - Advanced trading analysis: /launch, /snipe, /sell
  - Risk controls: per-user slippage & stop-loss settings
- - Alerts & notifications
+ - Alerts, charts, and notifications
 """
 import os
 import json
@@ -62,10 +62,12 @@ async def help_command(update, context):
         ("topgainers", "Top gaining tokens"),
         ("price", "Get token price"),
         ("launch", "Analyze token with DEX Screener"),
-        ("snipe", "Get entry time suggestion"),
-        ("sell", "Get selling info"),
+        ("snipe", "Suggest entry time"),
+        ("sell", "Show selling signals"),
         ("set_slippage", "Set max slippage %"),
-        ("set_stoploss", "Set stop-loss %")
+        ("set_stoploss", "Set stop-loss %"),
+        ("alerts", "Enable price alerts"),
+        ("chart", "Get basic price chart")
     ]
     text = "Available commands:\n" + "\n".join(f"/{c} — {d}" for c, d in cmds)
     await update.message.reply_text(text)
@@ -130,93 +132,34 @@ async def status(update, ctx):
     sol = bal.value / 1e9
     await update.message.reply_text(f"Wallet: `{data['wallet']}`\nSOL: {sol:.6f} SOL", parse_mode="Markdown")
 
-# Market Commands
-async def scan(update, ctx):
-    tokens = await get_potential_10x_tokens()
-    if not tokens:
-        await update.message.reply_text("No potential 10x tokens found.")
-        return
-    text = "Potential 10x tokens:\n"
-    for t in tokens:
-        symbol = t['symbol']
-        price = t['priceUsd']
-        volume = t['volume']['h24']
-        change = t['priceChange']['h1']
-        text += f"{symbol}: ${price}, Vol: ${volume}, Change: {change}%\n"
-    await update.message.reply_text(text)
+# Market Tools
+async def alerts(update, ctx):
+    await update.message.reply_text("📡 Price alerts coming soon.")
 
-async def topgainers(update, ctx):
-    async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=priceChange.h24&order=desc&limit=10")
-        data = response.json()
-        tokens = data.get('tokens', [])
-        if not tokens:
-            await update.message.reply_text("No top gainers found.")
-            return
-        text = "Top gainers:\n"
-        for t in tokens:
-            symbol = t['symbol']
-            change = t['priceChange']['h24']
-            text += f"{symbol}: {change}%\n"
-        await update.message.reply_text(text)
+async def chart(update, ctx):
+    await update.message.reply_text("📈 Charting feature coming soon.")
 
-async def price(update, ctx):
-    if not ctx.args:
-        await update.message.reply_text("Usage: /price <mint>")
-        return
-    mint = ctx.args[0]
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
-        data = response.json()
-        if not data.get('tokens'):
-            await update.message.reply_text("Token not found.")
-            return
-        token = data['tokens'][0]
-        price = token['priceUsd']
-        await update.message.reply_text(f"Price of {token['symbol']}: ${price}")
 
-# Placeholder for launch, snipe, sell handled above... (unchanged)
-# Add their full logic here if needed
-
-# Main
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    conv = ConversationHandler(
+    app.add_handler(CommandHandler('start', lambda u, c: u.message.reply_text("Use /register to begin.")))
+    app.add_handler(CommandHandler('launch', launch))
+    app.add_handler(CommandHandler('snipe', snipe))
+    app.add_handler(CommandHandler('sell', sell))
+    app.add_handler(CommandHandler('status', status))
+    app.add_handler(ConversationHandler(
         entry_points=[CommandHandler('register', register_start)],
         states={REGISTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive)]},
-        fallbacks=[CommandHandler('cancel', register_cancel)]
-    )
-    handlers = [
-        CommandHandler('start', start),
-        CommandHandler('help', help_command),
-        conv,
-        CommandHandler('wallets', wallets),
-        CommandHandler('balance', balance),
-        CommandHandler('portfolio', portfolio),
-        CommandHandler('history', history),
-        CommandHandler('status', status),
-        CommandHandler('scan', scan),
-        CommandHandler('topgainers', topgainers),
-        CommandHandler('price', price),
-        # Add CommandHandler('launch', launch), etc. once logic is finalized
-    ]
-    for h in handlers:
-        app.add_handler(h)
-    app.bot.set_my_commands([BotCommand(c[0], c[1]) for c in [
-        ('start', 'Welcome'),
-        ('help', 'Commands'),
-        ('register', 'Link wallet'),
-        ('wallets', 'Show wallet'),
-        ('balance', 'SOL balance'),
-        ('portfolio', 'Token portfolio'),
-        ('history', 'Recent TXs'),
-        ('status', 'Summary'),
-        ('scan', 'Potential 10x tokens'),
-        ('topgainers', 'Top gainers'),
-        ('price', 'Token price')
-        # Add ('launch', 'Analyze'), etc. once live
-    ]])
-    logger.info("🚀 UltimateTraderBot online")
+        fallbacks=[]
+    ))
+    app.bot.set_my_commands([
+        BotCommand("register", "Link wallet"),
+        BotCommand("status", "Check SOL & wallet"),
+        BotCommand("launch", "Scan top coins"),
+        BotCommand("snipe", "Best time to enter"),
+        BotCommand("sell", "Exit info")
+    ])
+    logger.info("Vortex Bot is live")
     app.run_polling()
 
 if __name__ == '__main__':
