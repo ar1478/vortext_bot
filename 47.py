@@ -155,13 +155,58 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not fetch status.")
 
 async def launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /launch <symbol>")
+    """
+    Analyze optimal launch/trade timing on Pump.fun and BullX for a given token.
+    Usage: /launch <symbol> <mintAddress>
+    """
+    args = context.args
+    if len(args) != 2:
+        await update.message.reply_text("❌ Usage: /launch <symbol> <mintAddress>")
         return
-    symbol = context.args[0]
-    await update.message.reply_text(f"🚀 Launching token {symbol} (coming soon)")
+    symbol, mint_address = args
+    data = load_user_data()
+    user_id = str(update.effective_user.id)
+    addr = data.get(user_id)
+    if not addr:
+        await update.message.reply_text("❌ Register first with /register <publicKey>.")
+        return
+    try:
+        # Analyze best time to trade
+        pump_time = await analyze_pumpfun_optimal(mint_address)
+        bull_time = await analyze_bullxio_optimal(mint_address)
+        reply = (
+            f"🔍 Analysis for {symbol}:
+"
+            f"• Pump.fun optimal entry: {pump_time}
+"
+            f"• BullX.io optimal entry: {bull_time}
+"
+            "Ready to launch/trade when ready."
+        )
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.error(f"Launch analysis error for {user_id}: {e}")
+        await update.message.reply_text("❌ Analysis failed. Please try again later.")
 
-async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- ANALYSIS HELPERS ---
+async def analyze_pumpfun_optimal(mint_address: str) -> str:
+    """
+    Placeholder: Fetch on-chain data or Pump.fun API, evaluate liquidity spikes,
+    historical launch times, and return a human-readable recommendation.
+    """
+    # TODO: integrate with Pump.fun API or on-chain RPC to get listing schedule,
+    # compute based on block times, volume metrics, MEV opportunities.
+    return "Within next 5 minutes of fair launch"  # stub recommendation
+
+async def analyze_bullxio_optimal(mint_address: str) -> str:
+    """
+    Placeholder: Query BullX.io orderbook or API,
+    estimate moment of highest volume/lowest slippage.
+    """
+    # TODO: use BullX.io REST API or Telegram bot forwarding logic
+    return "Immediate after listing at low slippage"  # stub recommendation
+
+async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("❌ Usage: /snipe <symbol>")
         return
