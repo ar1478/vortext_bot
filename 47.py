@@ -33,8 +33,7 @@ from solders.keypair import Keypair
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8152282783:AAH0ylvc63x_u1e15ST0-4zjQe_K4b4bVRc")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
-KEYPAIR_PATH = os.getenv("KEYPAIR_PATH", os.path.expanduser("~/.config/solana/id.json"))
-
+KEYPAIR_PATH = os.getenv("KEYPAIR_PATH", "./id.json")
 # --- SETUP LOGGING ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
