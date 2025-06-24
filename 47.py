@@ -1,13 +1,17 @@
-# vortex_bot.py — Telegram Meme Coin Bot (User-Provided Wallets with QR & History)
+# vortex_bot.py — Telegram Meme Coin Bot (User-Provided Wallets + Trading Stubs)
 """
 Commands:
- - /start               : Welcome message
- - /help                : List commands
- - /register <pubkey>   : Save your Solana public address
- - /wallets             : Show your registered address
- - /balance             : Check your SOL balance
- - /deposit             : Get your address QR code for deposit
- - /history             : View recent transaction signatures
+ - /start             : Welcome message
+ - /help              : List commands
+ - /register <pubkey> : Save your Solana public address
+ - /wallets           : Show your registered address
+ - /deposit           : Get your address QR code
+ - /balance           : Check your SOL balance
+ - /history           : View recent transactions
+ - /status            : Summary (wallet + balance)
+ - /launch <symbol>   : (coming soon) Launch token
+ - /snipe <symbol>    : (coming soon) Snipe token
+ - /sell <symbol>     : (coming soon) Sell tokens
 """
 import os
 import json
@@ -46,8 +50,7 @@ def save_user_data(data):
 # === COMMAND HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚡️ Welcome! Register your wallet with /register <publicKey>\n"
-        "Then use /deposit to get a QR code, and /balance or /history to view your funds."
+        "⚡️ Welcome! Register your wallet with /register <publicKey> and use /help to see all commands."
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -56,9 +59,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — List commands\n"
         "/register <pubkey> — Save your public key\n"
         "/wallets — Show registered address\n"
-        "/deposit — Get QR code for deposit\n"
+        "/deposit — Get QR code to deposit SOL\n"
         "/balance — Check your SOL balance\n"
-        "/history — View recent transaction signatures"
+        "/history — View recent transaction signatures\n"
+        "/status — Wallet + balance summary\n"
+        "/launch <symbol> — Launch a token (coming soon)\n"
+        "/snipe <symbol> — Snipe a token (coming soon)\n"
+        "/sell <symbol> — Sell tokens (coming soon)"
     )
     await update.message.reply_text(help_text)
 
@@ -80,8 +87,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_user_data()
-    user_id = str(update.effective_user.id)
-    addr = data.get(user_id)
+    addr = data.get(str(update.effective_user.id))
     if addr:
         await update.message.reply_text(f"👜 Your wallet:\n`{addr}`", parse_mode="Markdown")
     else:
@@ -89,12 +95,10 @@ async def wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_user_data()
-    user_id = str(update.effective_user.id)
-    addr = data.get(user_id)
+    addr = data.get(str(update.effective_user.id))
     if not addr:
         await update.message.reply_text("❌ Register first with /register <publicKey>.")
         return
-    # Generate QR code
     img = qrcode.make(addr)
     buf = BytesIO()
     img.save(buf, format='PNG')
@@ -103,61 +107,95 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_user_data()
-    user_id = str(update.effective_user.id)
-    addr = data.get(user_id)
+    addr = data.get(str(update.effective_user.id))
     if not addr:
         await update.message.reply_text("❌ Register first with /register <publicKey>.")
         return
     try:
-        pubkey = Pubkey.from_string(addr)
-        resp = await client.get_balance(pubkey)
+        resp = await client.get_balance(Pubkey.from_string(addr))
         sol = resp.value / 1e9
         await update.message.reply_text(f"💰 Your balance: {sol:.6f} SOL")
     except Exception as e:
-        logger.error(f"Balance error for {user_id}: {e}")
+        logger.error(f"Balance error for user {update.effective_user.id}: {e}")
         await update.message.reply_text("❌ Could not fetch balance.")
 
 async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_user_data()
-    user_id = str(update.effective_user.id)
-    addr = data.get(user_id)
+    addr = data.get(str(update.effective_user.id))
     if not addr:
         await update.message.reply_text("❌ Register first with /register <publicKey>.")
         return
     try:
-        pubkey = Pubkey.from_string(addr)
-        sigs = await client.get_signatures_for_address(pubkey, limit=10)
-        entries = sigs.value
+        entries = (await client.get_signatures_for_address(Pubkey.from_string(addr), limit=10)).value
         if not entries:
             await update.message.reply_text("No recent transactions found.")
             return
         lines = []
         for e in entries:
-            time = datetime.utcfromtimestamp(e.block_time).strftime('%Y-%m-%d %H:%M:%S') if e.block_time else 'N/A'
+            ts = e.block_time or 0
+            time = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') if ts else 'N/A'
             lines.append(f"{e.signature} @ {time}")
         await update.message.reply_text("📝 Recent txs:\n" + "\n".join(lines))
     except Exception as e:
-        logger.error(f"History error for {user_id}: {e}")
+        logger.error(f"History error for user {update.effective_user.id}: {e}")
         await update.message.reply_text("❌ Could not fetch history.")
 
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_user_data()
+    addr = data.get(str(update.effective_user.id))
+    if not addr:
+        await update.message.reply_text("❌ Register first with /register <publicKey>.")
+        return
+    try:
+        resp = await client.get_balance(Pubkey.from_string(addr))
+        sol = resp.value / 1e9
+        await update.message.reply_text(f"Wallet: `{addr}`\nBalance: {sol:.6f} SOL", parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Status error for user {update.effective_user.id}: {e}")
+        await update.message.reply_text("❌ Could not fetch status.")
+
+async def launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Usage: /launch <symbol>")
+        return
+    symbol = context.args[0]
+    await update.message.reply_text(f"🚀 Launching token {symbol} (coming soon)")
+
+async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Usage: /snipe <symbol>")
+        return
+    symbol = context.args[0]
+    await update.message.reply_text(f"⚡ Sniping token {symbol} (coming soon)")
+
+async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Usage: /sell <symbol>")
+        return
+    symbol = context.args[0]
+    await update.message.reply_text(f"💸 Selling token {symbol} (coming soon)")
+
 # === MAIN ENTRY ===
+from telegram.ext import CommandHandler
+
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     for cmd, handler in [
         ("start", start), ("help", help_command), ("register", register),
-        ("wallets", wallets), ("deposit", deposit), ("balance", balance), ("history", history)
+        ("wallets", wallets), ("deposit", deposit), ("balance", balance),
+        ("history", history), ("status", status), ("launch", launch),
+        ("snipe", snipe), ("sell", sell)
     ]:
         app.add_handler(CommandHandler(cmd, handler))
     app.bot.set_my_commands([
-        BotCommand("start", "Welcome message"),
-        BotCommand("help", "List commands"),
-        BotCommand("register", "Register your public key"),
-        BotCommand("wallets", "Show your address"),
-        BotCommand("deposit", "Get QR code to deposit"),
-        BotCommand("balance", "Check your SOL balance"),
-        BotCommand("history", "View recent txs"),
+        BotCommand("start", "Welcome message"), BotCommand("help", "List commands"),
+        BotCommand("register", "Register your public key"), BotCommand("wallets", "Show your address"),
+        BotCommand("deposit", "Get QR code to deposit"), BotCommand("balance", "Check your SOL"),
+        BotCommand("history", "View recent txs"), BotCommand("status", "Wallet+balance summary"),
+        BotCommand("launch", "Launch token (stub)"), BotCommand("snipe", "Snipe token (stub)"),
+        BotCommand("sell", "Sell token (stub)")
     ])
-    logger.info("🚀 Bot started: QR & history enabled")
+    logger.info("🚀 Bot started: full command set enabled")
     app.run_polling()
 
 if __name__ == '__main__':
