@@ -1,4 +1,5 @@
 python-telegram-bot>=20.0
-solana
 anchorpy
 pyserum
+solders>=0.18.0
+solana>=0.24.0
