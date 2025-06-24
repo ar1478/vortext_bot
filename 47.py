@@ -143,7 +143,7 @@ async def chart(update, ctx):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler('start', lambda u, c: u.message.reply_text("Use /register to begin.")))
-    app.add_handler(CommandHandler('launch', launch))
+    app.add_handler(CommandHandler('launch', launch_analysis))
     app.add_handler(CommandHandler('snipe', snipe))
     app.add_handler(CommandHandler('sell', sell))
     app.add_handler(CommandHandler('status', status))
