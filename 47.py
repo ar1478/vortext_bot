@@ -94,6 +94,58 @@ async def register_receive(update, ctx):
 async def register_cancel(update, ctx):
     await update.message.reply_text("Registration canceled.")
     return ConversationHandler.END
+async def launch_analysis(update, ctx):
+    await update.message.reply_text("🔍 Scanning top tokens... Please wait.")
+    try:
+        async with httpx.AsyncClient() as client:
+            # Fetch top 100 Solana tokens by 24h volume
+            res = await client.get(
+                "https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=volume.h24&order=desc&limit=100"
+            )
+            data = res.json()
+            tokens = data.get("tokens", [])
+
+        # Filter: volume > $100k and 1h change > 10%
+        filtered = [
+            t for t in tokens
+            if t.get("priceChange", {}).get("h1", 0) > 10
+            and t.get("volume", {}).get("h24", 0) > 100000
+        ]
+
+        if not filtered:
+            await update.message.reply_text("❌ No strong 10x candidates found.")
+            return
+
+        best = max(filtered, key=lambda t: t["priceChange"]["h1"] * t["volume"]["h24"])
+        symbol = best["symbol"]
+        price = best["priceUsd"]
+        mint = best["address"]
+        vol = best["volume"]["h24"]
+        chg1h = best["priceChange"]["h1"]
+        chg24h = best["priceChange"]["h24"]
+
+        # Analyze Pump.fun + Bullx.io
+        pump_time = await analyze_pumpfun_optimal(mint)
+        bullx_price = await analyze_bullxio_optimal(mint)
+
+        msg = (
+            f"🚀 *Best Launch Candidate*\n"
+            f"🔹 Token: `{symbol}`\n"
+            f"💰 Price: ${price}\n"
+            f"📈 1h Change: {chg1h}%\n"
+            f"📊 24h Change: {chg24h}%\n"
+            f"🔄 Volume 24h: ${vol}\n\n"
+            f"🧠 Based on:\n"
+            f"• Pump.fun optimal time: `{pump_time}`\n"
+            f"• Bullx.io ideal entry price: `{bullx_price}`\n\n"
+            f"🔗 Mint: `{mint}`"
+        )
+
+        await update.message.reply_text(msg, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"launch_analysis error: {e}")
+        await update.message.reply_text("❌ Error analyzing top token.")
 
 # Wallet Info
 async def wallets(update, ctx):
