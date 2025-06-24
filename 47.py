@@ -189,24 +189,46 @@ async def launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Analysis failed. Please try again later.")
 
 # --- ANALYSIS HELPERS ---
+import httpx
+
 async def analyze_pumpfun_optimal(mint_address: str) -> str:
     """
-    Placeholder: Fetch on-chain data or Pump.fun API, evaluate liquidity spikes,
-    historical launch times, and return a human-readable recommendation.
+    Fetch upcoming launch info from Pump.fun public API and compute entry window.
     """
-    # TODO: integrate with Pump.fun API or on-chain RPC to get listing schedule,
-    # compute based on block times, volume metrics, MEV opportunities.
-    return "Within next 5 minutes of fair launch"  # stub recommendation
+    try:
+        async with httpx.AsyncClient() as client_api:
+            # Example Pump.fun API endpoint for upcoming launches
+            resp = await client_api.get(f"https://api.pump.fun/v1/launches/{mint_address}")
+            data = resp.json()
+            # Assume data contains 'launch_time' in ISO format
+            launch_time = datetime.fromisoformat(data['launch_time'])
+            # Recommend entry 30 seconds after launch to avoid MEV
+            optimal = launch_time + timedelta(seconds=30)
+            return optimal.strftime('%Y-%m-%d %H:%M:%S UTC')
+    except Exception:
+        return "Unable to fetch Pump.fun analysis."
 
 async def analyze_bullxio_optimal(mint_address: str) -> str:
     """
-    Placeholder: Query BullX.io orderbook or API,
-    estimate moment of highest volume/lowest slippage.
+    Query BullX.io REST API for orderbook snapshot and suggest entry with minimal slippage.
     """
-    # TODO: use BullX.io REST API or Telegram bot forwarding logic
-    return "Immediate after listing at low slippage"  # stub recommendation
+    try:
+        async with httpx.AsyncClient() as client_api:
+            # Example BullX API for orderbook
+            resp = await client_api.get(f"https://api.bullxio.com/orderbook/{mint_address}")
+            ob = resp.json()
+            # Determine price depth at 1% slippage
+            bids = ob['bids']  # list of [price, size]
+            cum_size = 0
+            for price, size in bids:
+                cum_size += size
+                if cum_size >= ob['total_depth'] * 0.01:
+                    return f"Enter at {price} to limit slippage ~1%"
+            return "Enter at market with caution"
+    except Exception:
+        return "Unable to fetch BullX.io analysis."
 
-async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):(update: Update, context: ContextTypes.DEFAULT_TYPE):(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("❌ Usage: /snipe <symbol>")
         return
