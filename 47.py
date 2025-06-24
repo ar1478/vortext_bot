@@ -1,12 +1,11 @@
-# vortex_bot.py
+# vortex_bot.py — Simplified Telegram Meme Coin Bot (Per-User Wallets)
 """
-Telegram Meme Coin Trading Bot (Vortex Alternative)
-
-Self-hosted framework for Solana launchpad interactions via Telegram.
-Features:
- - /start, /help, /wallets, /balance, /status
- - On-chain Solana keypair loading via solders
- - Placeholder stubs: /launch, /snipe, /sell
+Telegram bot where each user gets their own Solana wallet and balance.
+Commands:
+ - /start : Welcome message
+ - /help  : List commands
+ - /wallets : Show or create your Solana wallet address
+ - /balance : Check your SOL balance
 """
 import os
 import json
@@ -17,100 +16,86 @@ from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from solana.rpc.async_api import AsyncClient
 
-# --- CONFIGURATION ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8152282783:AAH0ylvc63x_u1e15ST0-4zjQe_K4b4bVRc")
-KEYPAIR_PATH = os.getenv("KEYPAIR_PATH", "./id.json")
+# === CONFIGURATION ===
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
+USER_KEYS_DIR = "./user_wallets"
 
-# --- LOGGING ---
+# === LOGGING ===
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- LOAD KEYPAIR ---
-try:
-    with open(KEYPAIR_PATH, "r") as f:
-        secret_list = json.load(f)
-    secret_bytes = bytes(secret_list)
-    keypair = Keypair.from_bytes(secret_bytes)
-    WALLET_PUBKEY = Pubkey.from_string(str(keypair.pubkey()))
-    logger.info(f"Loaded wallet: {WALLET_PUBKEY}")
-except FileNotFoundError:
-    logger.error(f"Keypair file not found: {KEYPAIR_PATH}")
-    raise SystemExit("Error loading Solana keypair: file not found.")
-except Exception as e:
-    logger.error(f"Failed to load keypair: {e}")
-    raise SystemExit("Error loading Solana keypair. Check KEYPAIR_PATH and id.json format.")
-
-# --- SOLANA CLIENT ---
+# === SOLANA CLIENT ===
 client = AsyncClient(SOLANA_RPC_URL)
 
-# --- COMMAND HANDLERS ---
+# === WALLET MANAGEMENT ===
+def get_or_create_user_keypair(user_id: int) -> Keypair:
+    os.makedirs(USER_KEYS_DIR, exist_ok=True)
+    key_path = os.path.join(USER_KEYS_DIR, f"{user_id}.json")
+    if os.path.exists(key_path):
+        with open(key_path, "r") as f:
+            secret_list = json.load(f)
+        return Keypair.from_bytes(bytes(secret_list))
+    # create new keypair
+    kp = Keypair()
+    with open(key_path, "w") as f:
+        json.dump(list(bytes(kp)), f)
+    logger.info(f"Created new wallet for user {user_id}: {kp.pubkey()}")
+    return kp
+
+# === COMMAND HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('⚡️ VortexTrader is online!\nType /help to see commands.')
+    await update.message.reply_text(
+        "⚡️ Welcome! Each user has a private Solana wallet.\n" 
+        "Use /wallets to get your address and /balance to check your SOL."
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    commands = [
-        ("start", "Welcome message"),
-        ("help", "List commands"),
-        ("wallets", "Show loaded wallet public key"),
-        ("balance", "Show SOL balance"),
-        ("status", "Wallet + balance summary"),
-        ("launch", "(coming soon) Launch token"),
-        ("snipe", "(coming soon) Snipe token"),
-        ("sell", "(coming soon) Sell tokens")
-    ]
-    text = "Available commands:\n" + "\n".join(f"/{c} — {d}" for c, d in commands)
-    await update.message.reply_text(text)
+    help_text = (
+        "/start — Welcome message\n"
+        "/help — List commands\n"
+        "/wallets — Show or create your Solana wallet address\n"
+        "/balance — Check your SOL balance"
+    )
+    await update.message.reply_text(help_text)
 
 async def wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"👜 Loaded wallet: {WALLET_PUBKEY}")
+    user_id = update.effective_user.id
+    kp = get_or_create_user_keypair(user_id)
+    pubkey = kp.pubkey()
+    await update.message.reply_text(
+        f"👜 Your Solana wallet address:\n`{pubkey}`",
+        parse_mode="Markdown"
+    )
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    kp = get_or_create_user_keypair(user_id)
+    pubkey = kp.pubkey()
     try:
-        resp = await client.get_balance(WALLET_PUBKEY)
+        resp = await client.get_balance(pubkey)
         sol = resp.value / 1e9
-        await update.message.reply_text(f"💰 SOL Balance: {sol:.6f} SOL")
+        await update.message.reply_text(f"💰 Your balance: {sol:.6f} SOL")
     except Exception as e:
-        logger.error(f"Balance error: {e}")
-        await update.message.reply_text("Error fetching balance.")
+        logger.error(f"Error fetching balance for user {user_id}: {e}")
+        await update.message.reply_text("❌ Could not retrieve balance. Please try again later.")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Wallet: {WALLET_PUBKEY}\nSOL Balance: {(await client.get_balance(WALLET_PUBKEY)).value / 1e9:.6f} SOL")
-
-async def launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("/launch not implemented yet. Coming soon 🔧")
-
-async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("/snipe not implemented yet. Coming soon 🔧")
-
-async def sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("/sell not implemented yet. Coming soon 🔧")
-
-# --- ENTRY POINT ---
+# === MAIN ENTRY ===
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    # Register commands
-    for cmd, handler in [
-        ("start", start),
-        ("help", help_command),
-        ("wallets", wallets),
-        ("balance", balance),
-        ("status", status),
-        ("launch", launch),
-        ("snipe", snipe),
-        ("sell", sell),
-    ]:
-        app.add_handler(CommandHandler(cmd, handler))
-    # Set Telegram UI menu
+    # Register handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("wallets", wallets))
+    app.add_handler(CommandHandler("balance", balance))
+    # Set bot commands for UI
     app.bot.set_my_commands([
         BotCommand("start", "Welcome message"),
         BotCommand("help", "List commands"),
-        BotCommand("wallets", "Show wallet public key"),
-        BotCommand("balance", "Show SOL balance"),
-        BotCommand("status", "Wallet + balance summary"),
+        BotCommand("wallets", "Show Solana wallet address"),
+        BotCommand("balance", "Check your SOL balance"),
     ])
-    logger.info("Starting VortexTrader bot...")
-    # Blocking call, no extra asyncio.run
+    logger.info("🚀 Bot started: per-user wallet mode")
     app.run_polling()
 
 if __name__ == '__main__':
