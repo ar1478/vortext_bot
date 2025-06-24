@@ -3,3 +3,4 @@ anchorpy
 pyserum
 solders>=0.18.0
 solana>=0.24.0
+qrcode>=7.3.1
