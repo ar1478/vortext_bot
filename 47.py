@@ -8,6 +8,7 @@ from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
 from telegram.error import Conflict
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Confirmed
+import fcntl  # For PID file locking (Unix-like systems)
 
 # Config
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -238,7 +239,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔔 Add Alert", callback_data=f"alert_{mint}")]
         ]
         
-        # FIXED: Added closing parentheses
         await update.message.reply_text(
             response,
             parse_mode="HTML",
@@ -399,21 +399,26 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
     # Placeholder for watchlist monitoring
 
 # --- Main Application ---
-def main():
+async def main():
     # Create PID file to prevent multiple instances
     pid_file = "vortex_bot.pid"
-    if os.path.exists(pid_file):
-        try:
-            with open(pid_file, "r") as f:
-                pid = int(f.read())
-            os.kill(pid, 0)  # Check if process exists
-            logger.error("❌ Another instance is running. Exiting.")
-            return
-        except:
-            pass  # Process doesn't exist
-            
-    with open(pid_file, "w") as f:
-        f.write(str(os.getpid()))
+    try:
+        with open(pid_file, "a") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if os.path.exists(pid_file):
+                try:
+                    with open(pid_file, "r") as f_pid:
+                        pid = int(f_pid.read())
+                    os.kill(pid, 0)  # Check if process exists
+                    logger.error("❌ Another instance is running. Exiting.")
+                    return
+                except:
+                    pass  # Process doesn't exist
+            f.write(str(os.getpid()))
+            f.flush()
+    except IOError:
+        logger.error("❌ Cannot acquire PID file lock. Exiting.")
+        return
     
     try:
         app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -480,7 +485,7 @@ def main():
             )
         
         logger.info("🚀 Vortex Bot is now running")
-        app.run_polling()
+        await app.run_polling()
     except Conflict as e:
         logger.error(f"Conflict error: {e}")
         logger.error("Ensure only one instance is running")
@@ -491,6 +496,7 @@ def main():
             os.remove(pid_file)
         except:
             pass
+        await rpc_client.close()  # Close Solana RPC client
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
