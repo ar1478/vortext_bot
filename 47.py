@@ -458,7 +458,7 @@ async def main():
         command_handlers = [
             CommandHandler("start", start),
             CommandHandler("help", help_command),
-            convHandler,
+            conv_handler,
             CommandHandler("wallets", wallets),
             CommandHandler("balance", balance),
             CommandHandler("scan", scan),
