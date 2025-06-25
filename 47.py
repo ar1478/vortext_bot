@@ -110,7 +110,7 @@ async def launch(update, ctx):
     if not args:
         # scan mode
         await update.message.reply_text("🔍 Scanning top 10× candidates…")
-        tokens = await fetch_filter_gain(limit=50)
+        tokens = await fetch_filter_gain()
         if not tokens:
             return await update.message.reply_text("❌ No strong candidates right now.")
         t = tokens[0]
