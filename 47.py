@@ -317,10 +317,11 @@ async def analyze_launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
         
-        await update.message.reply_text()
+        await update.message.reply_text(
             response,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
     
     # Deep analysis mode
