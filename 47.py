@@ -1,14 +1,3 @@
-# vortex_bot.py — The Ultimate Telegram Meme Coin Trading Bot
-"""
-All-in-one Telegram trading bot for Solana launchpads (pump.fun and bullx.io).
-Features:
- - Interactive wallet linking (/register)
- - Balance, history, status, portfolio overview
- - Real-time token discovery (/scan, /topgainers, /price)
- - Advanced trading analysis: /launch, /snipe, /sell
- - Risk controls: per-user slippage & stop-loss settings
- - Alerts & notifications
-"""
 import os
 import json
 import logging
@@ -109,6 +98,96 @@ async def balance(update, ctx):
     sol = bal.value / 1e9
     await update.message.reply_text(f"💰 SOL: {sol:.6f}")
 
+# New Handlers from Previous Code
+async def portfolio(update, ctx):
+    data = load_data().get(str(update.effective_user.id))
+    if not data:
+        return await update.message.reply_text("Link with /register.")
+    await update.message.reply_text("Portfolio overview coming soon! (SPL token balances not yet implemented.)")
+
+async def history(update, ctx):
+    data = load_data().get(str(update.effective_user.id))
+    if not data:
+        return await update.message.reply_text("Link with /register.")
+    await update.message.reply_text("Transaction history coming soon! (Recent txs not yet implemented.)")
+
+async def status(update, ctx):
+    data = load_data().get(str(update.effective_user.id))
+    if not data:
+        return await update.message.reply_text("Link with /register.")
+    bal = await rpc_client.get_balance(Pubkey.from_string(data['wallet']))
+    sol = bal.value / 1e9
+    await update.message.reply_text(
+        f"📊 Wallet Status:\n"
+        f"Wallet: `{data['wallet']}`\n"
+        f"SOL: {sol:.6f}\n"
+        f"Slippage: {data['slippage']}%\n"
+        f"Stop-loss: {data['stoploss']}%",
+        parse_mode="Markdown"
+    )
+
+async def scan(update, ctx):
+    async with httpx.AsyncClient() as client:
+        response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=volume.h24&order=desc&limit=50")
+        tokens = response.json().get("tokens", [])
+    candidates = [
+        t for t in tokens
+        if t.get('priceChange', {}).get('h1', 0) > 20 and t['volume']['h24'] > 100000
+    ]
+    if not candidates:
+        await update.message.reply_text("No high-potential tokens found right now.")
+        return
+    reply = "🔍 Potential 10x Tokens:\n"
+    for t in candidates[:5]:
+        reply += f"\n{t['symbol']} — ${t['priceUsd']}, 1h: {t['priceChange']['h1']}%\nhttps://pump.fun/{t['address']}"
+    await update.message.reply_text(reply)
+
+async def topgainers(update, ctx):
+    async with httpx.AsyncClient() as client:
+        response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=priceChange.h24&order=desc&limit=10")
+        tokens = response.json().get("tokens", [])
+    if not tokens:
+        await update.message.reply_text("No top gainers available right now.")
+        return
+    reply = "🏆 Top Gainers (24h):\n"
+    for t in tokens[:5]:
+        reply += f"\n{t['symbol']} — ${t['priceUsd']}, 24h: {t['priceChange']['h24']}%\nhttps://pump.fun/{t['address']}"
+    await update.message.reply_text(reply)
+
+async def price(update, ctx):
+    if not ctx.args:
+        return await update.message.reply_text("Usage: /price <token_address>")
+    mint = ctx.args[0]
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
+        token = response.json().get("tokens", [{}])[0]
+    if not token:
+        await update.message.reply_text("Token not found.")
+        return
+    await update.message.reply_text(
+        f"💰 {token['symbol']} — ${token['priceUsd']}\n"
+        f"24h Change: {token['priceChange']['h24']}%\n"
+        f"https://pump.fun/{mint}"
+    )
+
+async def launch(update, ctx):
+    if not ctx.args:
+        return await update.message.reply_text("Usage: /launch <token_address>")
+    mint = ctx.args[0]
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
+        token = response.json().get("tokens", [{}])[0]
+    if not token:
+        await update.message.reply_text("Token not found.")
+        return
+    await update.message.reply_text(
+        f"🚀 {token['symbol']} Launch Analysis:\n"
+        f"Price: ${token['priceUsd']}\n"
+        f"Volume (24h): ${token['volume']['h24']}\n"
+        f"1h Change: {token['priceChange']['h1']}%\n"
+        f"https://pump.fun/{mint}"
+    )
+
 async def snipe(update, ctx):
     async with httpx.AsyncClient() as client:
         response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=volume.h24&order=desc&limit=50")
@@ -120,7 +199,6 @@ async def snipe(update, ctx):
     if not candidates:
         await update.message.reply_text("No sniper targets found right now. Check later.")
         return
-
     now = datetime.utcnow()
     reply = "🎯 Best sniper targets (next hour):\n"
     for t in candidates[:5]:
@@ -132,7 +210,52 @@ async def snipe(update, ctx):
         reply += f"\n{symbol} — ${price}, Vol: ${vol}, Entry: {entry.strftime('%H:%M:%S UTC')}\nhttps://pump.fun/{mint}"
     await update.message.reply_text(reply)
 
-# Main (only launch command setup shown for brevity)
+async def sell(update, ctx):
+    data = load_data().get(str(update.effective_user.id))
+    if not data:
+        return await update.message.reply_text("Link with /register.")
+    await update.message.reply_text(
+        f"💸 Sell Strategy:\n"
+        f"Slippage: {data['slippage']}%\n"
+        f"Stop-loss: {data['stoploss']}%\n"
+        f"Selling insights coming soon!"
+    )
+
+async def set_slippage(update, ctx):
+    if not ctx.args:
+        return await update.message.reply_text("Usage: /set_slippage <percentage>")
+    data = load_data()
+    uid = str(update.effective_user.id)
+    if uid not in data:
+        return await update.message.reply_text("Link with /register.")
+    try:
+        slippage = float(ctx.args[0])
+        if slippage < 0 or slippage > 100:
+            raise ValueError
+    except ValueError:
+        return await update.message.reply_text("Invalid percentage (0-100).")
+    data[uid]["slippage"] = slippage
+    save_data(data)
+    await update.message.reply_text(f"Slippage set to {slippage}%")
+
+async def set_stoploss(update, ctx):
+    if not ctx.args:
+        return await update.message.reply_text("Usage: /set_stoploss <percentage>")
+    data = load_data()
+    uid = str(update.effective_user.id)
+    if uid not in data:
+        return await update.message.reply_text("Link with /register.")
+    try:
+        stoploss = float(ctx.args[0])
+        if stoploss < 0 or stoploss > 100:
+            raise ValueError
+    except ValueError:
+        return await update.message.reply_text("Invalid percentage (0-100).")
+    data[uid]["stoploss"] = stoploss
+    save_data(data)
+    await update.message.reply_text(f"Stop-loss set to {stoploss}%")
+
+# Main
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     conv = ConversationHandler(
@@ -140,19 +263,42 @@ def main():
         states={REGISTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive)]},
         fallbacks=[CommandHandler('cancel', register_cancel)]
     )
+    # Add all handlers
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('help', help_command))
     app.add_handler(conv)
     app.add_handler(CommandHandler('wallets', wallets))
     app.add_handler(CommandHandler('balance', balance))
+    app.add_handler(CommandHandler('portfolio', portfolio))
+    app.add_handler(CommandHandler('history', history))
+    app.add_handler(CommandHandler('status', status))
+    app.add_handler(CommandHandler('scan', scan))
+    app.add_handler(CommandHandler('topgainers', topgainers))
+    app.add_handler(CommandHandler('price', price))
+    app.add_handler(CommandHandler('launch', launch))
     app.add_handler(CommandHandler('snipe', snipe))
+    app.add_handler(CommandHandler('sell', sell))
+    app.add_handler(CommandHandler('set_slippage', set_slippage))
+    app.add_handler(CommandHandler('set_stoploss', set_stoploss))
+    
+    # Register all commands with Telegram
     app.bot.set_my_commands([
         BotCommand("start", "Welcome"),
         BotCommand("help", "Commands"),
         BotCommand("register", "Link wallet"),
         BotCommand("wallets", "Show wallet"),
         BotCommand("balance", "SOL balance"),
-        BotCommand("snipe", "Sniping target")
+        BotCommand("portfolio", "Portfolio overview"),
+        BotCommand("history", "Recent txs"),
+        BotCommand("status", "Wallet status"),
+        BotCommand("scan", "Scan 10x tokens"),
+        BotCommand("topgainers", "Top gainers"),
+        BotCommand("price", "Token price"),
+        BotCommand("launch", "Analyze launch"),
+        BotCommand("snipe", "Sniping target"),
+        BotCommand("sell", "Sell strategy"),
+        BotCommand("set_slippage", "Set slippage"),
+        BotCommand("set_stoploss", "Set stop-loss")
     ])
     logger.info("🚀 UltimateTraderBot online")
     app.run_polling()
