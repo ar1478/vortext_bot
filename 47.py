@@ -421,26 +421,56 @@ async def main():
         try:
             with open(pid_file, "r") as f:
                 pid = int(f.read())
-            os.kill(pid, 0)  # Check if process exists
+            os.kill(pid, 0)
             logger.error("❌ Another instance is running. Exiting.")
             return
         except:
-            pass  # Process doesn't exist
+            pass
 
     with open(pid_file, "w") as f:
         f.write(str(os.getpid()))
 
     try:
-        # Validate token
         if not TELEGRAM_TOKEN:
             logger.error("TELEGRAM_TOKEN is not set")
             return
 
-        # Build application
-        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-        if not app.bot:
-            logger.error("Failed to initialize bot. Check TELEGRAM_TOKEN.")
-            return
+        # Post-init function
+        async def post_init(application):
+            if application.bot is None:
+                logger.error("application.bot is None, cannot set commands")
+                return
+            try:
+                await application.bot.set_my_commands(commands)
+                logger.info("✅ Bot commands registered")
+            except Exception as e:
+                logger.error(f"Failed to set bot commands: {e}")
+
+        # Define bot commands
+        commands = [
+            BotCommand("start", "Start the bot"),
+            BotCommand("help", "Show command list"),
+            BotCommand("register", "Link Solana wallet"),
+            BotCommand("wallets", "Show linked wallet"),
+            BotCommand("balance", "Check SOL balance"),
+            BotCommand("history", "Recent transactions"),
+            BotCommand("status", "Wallet summary"),
+            BotCommand("scan", "Scan potentials"),
+            BotCommand("topgainers", "24h top gainers"),
+            BotCommand("price", "Price check"),
+            BotCommand("launch", "Analyze new token"),
+            BotCommand("snipe", "Entry timing"),
+            BotCommand("sell", "Exit strategy"),
+            BotCommand("watch", "Add watch"),
+            BotCommand("unwatch", "Remove watch"),
+            BotCommand("watchlist", "View your watchlist"),
+            BotCommand("set_slippage", "Set slippage %"),
+            BotCommand("set_stoploss", "Set stop-loss %"),
+            BotCommand("alert", "Set price alert"),
+        ]
+
+        # Build app with post_init hook
+        app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
         # Define conversation handler
         conv_handler = ConversationHandler(
@@ -451,82 +481,30 @@ async def main():
                     CallbackQueryHandler(register_cancel, pattern="^cancel_register$")
                 ]
             },
-            fallbacks=[CommandHandler("cancel", register_cancel)]
+            fallbacks=[CommandHandler("cancel", register_cancel)],
         )
 
         # Register command handlers
-        command_handlers = [
-            CommandHandler("start", start),
-            CommandHandler("help", help_command),
-            conv_handler,
-            CommandHandler("wallets", wallets),
-            CommandHandler("balance", balance),
-            CommandHandler("scan", scan),
-            CommandHandler("price", price),
-            CommandHandler("watch", watch_token),
-            CommandHandler("watchlist", show_watchlist),
-            CommandHandler("launch", analyze_launch),
-        ]
-
-        for handler in command_handlers:
-            app.add_handler(handler)
-
-        # Add button handler
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(conv_handler)
+        app.add_handler(CommandHandler("wallets", wallets))
+        app.add_handler(CommandHandler("balance", balance))
+        app.add_handler(CommandHandler("scan", scan))
+        app.add_handler(CommandHandler("price", price))
+        app.add_handler(CommandHandler("watch", watch_token))
+        app.add_handler(CommandHandler("watchlist", show_watchlist))
+        app.add_handler(CommandHandler("launch", analyze_launch))
         app.add_handler(CallbackQueryHandler(button_handler))
 
-        # Define bot commands
-        commands = [
-  BotCommand("start", "Start the bot"),
-  BotCommand("help", "Show command list"),
-  BotCommand("register", "Link Solana wallet"),
-  BotCommand("wallets", "Show linked wallet"),
-  BotCommand("balance", "Check SOL balance"),
-  BotCommand("history", "Recent transactions"),
-  BotCommand("status", "Wallet summary"),
-  BotCommand("scan", "Scan potentials"),
-  BotCommand("topgainers", "24h top gainers"),
-  BotCommand("price", "Price check"),
-  BotCommand("launch", "Analyze new token"),
-  BotCommand("snipe", "Entry timing"),
-  BotCommand("sell", "Exit strategy"),
-  BotCommand("watch", "Add watch"),
-  BotCommand("unwatch", "Remove watch"),
-  BotCommand("watchlist", "View your watchlist"),
-  BotCommand("set_slippage", "Set slippage %"),
-  BotCommand("set_stoploss", "Set stop-loss %"),
-  BotCommand("alert", "Set price alert"),
-]
-
-
-        # Post-initialization function with error handling
-        async def post_init(application):
-            """Set bot commands after initialization."""
-            if application.bot is None:
-                logger.error("application.bot is None, cannot set commands")
-                return
-            try:
-                await application.bot.set_my_commands(commands)
-                logger.info("✅ Bot commands registered")
-            except Exception as e:
-                logger.error(f"Failed to set bot commands: {e}")
-
-        app.post_init(post_init)
-
-        # Setup background tasks
-        job_queue = app.job_queue
-        if job_queue:
-            job_queue.run_repeating(
-                check_watchlist,
-                interval=300,  # 5 minutes
-                first=10
-            )
+        # Schedule background job
+        app.job_queue.run_repeating(check_watchlist, interval=300, first=10)
 
         logger.info("🚀 Vortex Bot is now running")
         await app.run_polling()
 
     except Conflict as e:
         logger.error(f"Conflict error: {e}")
-        logger.error("Ensure only one instance is running")
     except Exception as e:
         logger.exception(f"Unexpected error: {e}")
     finally:
