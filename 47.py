@@ -106,15 +106,42 @@ async def scan(update, ctx):
 
 # Core Launch/Snipe/Sell
 async def launch(update, ctx):
-    arr = await fetch_filter_gain()
-    if not arr: return await update.message.reply_text("No good launch coins.")
-    t = arr[0]
-    ptime = await analyze_pumpfun_optimal(t['address'])
-    bprice = await analyze_bullxio_optimal(t['address'])
-    msg = (f"🚀 Launch candidate: {t['symbol']}\n"
-           f"Price: ${t['priceUsd']}\n1h: {t['priceChange']['h1']}%, 24h: {t['priceChange']['h24']}%\n"
-           f"Pump.fun entry: {ptime}\nBullX.io ideal price: {bprice}\nMint: `{t['address']}`")
-    await update.message.reply_text(msg)
+    args = ctx.args
+    if not args:
+        # scan mode
+        await update.message.reply_text("🔍 Scanning top 10× candidates…")
+        tokens = await fetch_filter_gain(limit=50)
+        if not tokens:
+            return await update.message.reply_text("❌ No strong candidates right now.")
+        t = tokens[0]
+        return await update.message.reply_text(
+            f"🚀 Top candidate:\n"
+            f"• {t['symbol']} @ ${t['priceUsd']}\n"
+            f"• 1h: {t['priceChange']['h1']}%, 24h: {t['priceChange']['h24']}%\n"
+            f"• Mint: `{t['address']}`"
+        , parse_mode="Markdown")
+    # deep-dive mode
+    symbol, mint = args[0].upper(), args[1]
+    await update.message.reply_text(f"🔍 Analyzing {symbol} ({mint})…")
+    # fetch from DEX Screener
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
+        arr = resp.json().get("tokens", [])
+    if not arr:
+        return await update.message.reply_text("❌ Token not found on DEX Screener.")
+    tok = arr[0]
+    p1h, p24h, vol = tok['priceChange']['h1'], tok['priceChange']['h24'], tok['volume']['h24']
+    pump_time = await analyze_pumpfun_optimal(mint)
+    bull_price = await analyze_bullxio_optimal(mint)
+    await update.message.reply_text(
+        f"🔎 *{symbol}* Analysis:\n"
+        f"• Price: ${tok['priceUsd']}\n"
+        f"• 1h Δ: {p1h}%, 24h Δ: {p24h}%\n"
+        f"• Vol(24h): ${vol}\n\n"
+        f"⏰ Pump.fun entry: `{pump_time}`\n"
+        f"💲 BullX.io target: `{bull_price}`\n"
+    , parse_mode="Markdown")
+
 
 async def snipe(update, ctx):
     if not ctx.args: return await update.message.reply_text("Usage: /snipe <mint>")
