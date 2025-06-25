@@ -8,3 +8,4 @@ httpx>=0.23.0
 ccxt>=3.0.0
 matplotlib
 loguru
+pyrate-limiter
