@@ -476,16 +476,27 @@ async def main():
 
         # Define bot commands
         commands = [
-            BotCommand("start", "Start the bot"),
-            BotCommand("help", "Show command list"),
-            BotCommand("register", "Link Solana wallet"),
-            BotCommand("balance", "Check SOL balance"),
-            BotCommand("scan", "Find potential tokens"),
-            BotCommand("price", "Check token price"),
-            BotCommand("launch", "Analyze new token"),
-            BotCommand("watch", "Monitor token"),
-            BotCommand("watchlist", "View your watchlist"),
-        ]
+  BotCommand("start", "Start the bot"),
+  BotCommand("help", "Show command list"),
+  BotCommand("register", "Link Solana wallet"),
+  BotCommand("wallets", "Show linked wallet"),
+  BotCommand("balance", "Check SOL balance"),
+  BotCommand("history", "Recent transactions"),
+  BotCommand("status", "Wallet summary"),
+  BotCommand("scan", "Scan potentials"),
+  BotCommand("topgainers", "24h top gainers"),
+  BotCommand("price", "Price check"),
+  BotCommand("launch", "Analyze new token"),
+  BotCommand("snipe", "Entry timing"),
+  BotCommand("sell", "Exit strategy"),
+  BotCommand("watch", "Add watch"),
+  BotCommand("unwatch", "Remove watch"),
+  BotCommand("watchlist", "View your watchlist"),
+  BotCommand("set_slippage", "Set slippage %"),
+  BotCommand("set_stoploss", "Set stop-loss %"),
+  BotCommand("alert", "Set price alert"),
+]
+
 
         # Post-initialization function with error handling
         async def post_init(application):
