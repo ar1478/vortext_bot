@@ -1,34 +1,74 @@
 import os
 import json
 import logging
+import asyncio
+import re
 from datetime import datetime, timedelta
 from solders.pubkey import Pubkey
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, ConversationHandler
 )
+from telegram.error import Conflict
 from solana.rpc.async_api import AsyncClient
+from solana.rpc.commitment import Confirmed
 import httpx
 
 # === CONFIGURATION ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN environment variable is required")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 DATA_FILE = "user_data.json"
+WATCHLIST_FILE = "watchlist.json"
+DEX_SCREENER_BASE_URL = "https://api.dexscreener.com/latest/dex"
 
 # === LOGGING ===
-logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.INFO,
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
 # === SOLANA CLIENT ===
-rpc_client = AsyncClient(SOLANA_RPC_URL)
+rpc_client = AsyncClient(SOLANA_RPC_URL, commitment=Confirmed)
 
 # === USER STORAGE & SETTINGS ===
 def load_data():
-    return json.loads(open(DATA_FILE).read()) if os.path.exists(DATA_FILE) else {}
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        logger.error(f"Data load error: {e}")
+        return {}
 
-def save_data(d):
-    open(DATA_FILE, 'w').write(json.dumps(d))
+def save_data(data):
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Data save error: {e}")
+
+def load_watchlist():
+    try:
+        if os.path.exists(WATCHLIST_FILE):
+            with open(WATCHLIST_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        logger.error(f"Watchlist load error: {e}")
+        return {}
+
+def save_watchlist(watchlist):
+    try:
+        with open(WATCHLIST_FILE, 'w') as f:
+            json.dump(watchlist, f, indent=2)
+    except Exception as e:
+        logger.error(f"Watchlist save error: {e}")
 
 # === STATES ===
 REGISTER = 1
@@ -37,19 +77,18 @@ REGISTER = 1
 async def fetch_tokens(client, url):
     """Fetch token data from DexScreener API with error handling."""
     try:
-        response = await client.get(url)
-        response.raise_for_status()  # Raise an error for bad status codes
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
         data = response.json()
-        # Adjust based on actual API response structure
         return data.get("pairs", []) or data.get("tokens", [])
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching tokens: {e}")
+        logger.error(f"HTTP error fetching tokens from {url}: {e}")
         return []
     except json.JSONDecodeError:
         logger.error(f"Invalid JSON response from {url}")
         return []
     except Exception as e:
-        logger.error(f"Unexpected error fetching tokens: {e}")
+        logger.error(f"Unexpected error fetching tokens from {url}: {e}")
         return []
 
 # === COMMAND HANDLERS ===
@@ -75,7 +114,9 @@ async def help_command(update, context):
         ("snipe", "Best time to enter"),
         ("sell", "Selling insights"),
         ("set_slippage", "Set max slippage %"),
-        ("set_stoploss", "Set stop-loss %")
+        ("set_stoploss", "Set stop-loss %"),
+        ("watch", "Add token to watchlist"),
+        ("watchlist", "View watchlist")
     ]
     text = "Available commands:\n" + "\n".join(f"/{c} — {d}" for c, d in cmds)
     await update.message.reply_text(text)
@@ -83,7 +124,11 @@ async def help_command(update, context):
 # Registration Commands
 async def register_start(update, ctx):
     """Start the wallet registration process."""
-    await update.message.reply_text("Send your Solana public key to link:")
+    keyboard = [[InlineKeyboardButton("Cancel", callback_data="cancel_register")]]
+    await update.message.reply_text(
+        "🔑 Send your Solana public key to link:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return REGISTER
 
 async def register_receive(update, ctx):
@@ -91,8 +136,11 @@ async def register_receive(update, ctx):
     key = update.message.text.strip()
     try:
         Pubkey.from_string(key)
-    except:
-        return await update.message.reply_text("Invalid key, try again.")
+        if len(key) < 32 or not re.match(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$', key):
+            raise ValueError
+    except Exception:
+        await update.message.reply_text("❌ Invalid Solana address. Try again.")
+        return REGISTER
     data = load_data()
     uid = str(update.effective_user.id)
     data[uid] = {"wallet": key, "slippage": 1.0, "stoploss": 5.0}
@@ -103,7 +151,9 @@ async def register_receive(update, ctx):
 
 async def register_cancel(update, ctx):
     """Cancel the registration process."""
-    await update.message.reply_text("Registration canceled.")
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("❌ Registration canceled.")
     return ConversationHandler.END
 
 # Wallet Info Commands
@@ -111,68 +161,89 @@ async def wallets(update, ctx):
     """Show the linked wallet address."""
     data = load_data().get(str(update.effective_user.id))
     if data:
-        await update.message.reply_text(f"Wallet: `{data['wallet']}`", parse_mode="Markdown")
+        keyboard = [[InlineKeyboardButton("View on Solscan", url=f"https://solscan.io/account/{data['wallet']}")]]
+        await update.message.reply_text(
+            f"👛 Wallet: `{data['wallet']}`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     else:
-        await update.message.reply_text("No wallet linked.")
+        await update.message.reply_text("No wallet linked. Use /register.")
 
 async def balance(update, ctx):
     """Check the SOL balance of the linked wallet."""
     data = load_data().get(str(update.effective_user.id))
     if not data:
         return await update.message.reply_text("Link with /register.")
-    bal = await rpc_client.get_balance(Pubkey.from_string(data['wallet']))
-    sol = bal.value / 1e9
-    await update.message.reply_text(f"💰 SOL: {sol:.6f}")
+    try:
+        bal = await rpc_client.get_balance(Pubkey.from_string(data['wallet']))
+        sol = bal.value / 1e9
+        await update.message.reply_text(f"💰 SOL: {sol:.6f}")
+    except Exception as e:
+        logger.error(f"Balance error: {e}")
+        await update.message.reply_text("⚠️ Error fetching balance. Try again later.")
 
 async def portfolio(update, ctx):
     """Show SPL token balances in the linked wallet."""
     data = load_data().get(str(update.effective_user.id))
     if not data:
         return await update.message.reply_text("Link with /register.")
-    wallet = Pubkey.from_string(data['wallet'])
-    token_accounts = await rpc_client.get_token_accounts_by_owner(wallet, commitment="confirmed")
-    if not token_accounts.value:
-        await update.message.reply_text("No SPL tokens found.")
-        return
-    reply = "Your SPL Tokens:\n"
-    for acc in token_accounts.value:
-        token_account = acc.pubkey
-        balance = await rpc_client.get_token_account_balance(token_account)
-        mint = balance.value.mint
-        amount = balance.value.ui_amount
-        reply += f"- {mint}: {amount}\n"
-    await update.message.reply_text(reply)
+    try:
+        wallet = Pubkey.from_string(data['wallet'])
+        token_accounts = await rpc_client.get_token_accounts_by_owner(wallet, commitment="confirmed")
+        if not token_accounts.value:
+            await update.message.reply_text("No SPL tokens found.")
+            return
+        reply = "Your SPL Tokens:\n"
+        for acc in token_accounts.value:
+            token_account = acc.pubkey
+            balance = await rpc_client.get_token_account_balance(token_account)
+            mint = balance.value.mint
+            amount = balance.value.ui_amount
+            reply += f"- {mint}: {amount}\n"
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.error(f"Portfolio error: {e}")
+        await update.message.reply_text("⚠️ Error fetching portfolio. Try again later.")
 
 async def history(update, ctx):
     """Show recent transactions for the linked wallet."""
     data = load_data().get(str(update.effective_user.id))
     if not data:
         return await update.message.reply_text("Link with /register.")
-    wallet = Pubkey.from_string(data['wallet'])
-    signatures = await rpc_client.get_signatures_for_address(wallet, limit=5)
-    if not signatures.value:
-        await update.message.reply_text("No recent transactions.")
-        return
-    reply = "Recent Transactions:\n"
-    for sig in signatures.value:
-        reply += f"- {sig.signature} (slot {sig.slot})\n"
-    await update.message.reply_text(reply)
+    try:
+        wallet = Pubkey.from_string(data['wallet'])
+        signatures = await rpc_client.get_signatures_for_address(wallet, limit=5)
+        if not signatures.value:
+            await update.message.reply_text("No recent transactions.")
+            return
+        reply = "Recent Transactions:\n"
+        for sig in signatures.value:
+            reply += f"- {sig.signature} (slot {sig.slot})\n"
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.error(f"History error: {e}")
+        await update.message.reply_text("⚠️ Error fetching transactions. Try again later.")
 
 async def status(update, ctx):
     """Show a summary of wallet status."""
     data = load_data().get(str(update.effective_user.id))
     if not data:
         return await update.message.reply_text("Link with /register.")
-    bal = await rpc_client.get_balance(Pubkey.from_string(data['wallet']))
-    sol = bal.value / 1e9
-    await update.message.reply_text(
-        f"📊 Wallet Status:\n"
-        f"Wallet: `{data['wallet']}`\n"
-        f"SOL: {sol:.6f}\n"
-        f"Slippage: {data['slippage']}%\n"
-        f"Stop-loss: {data['stoploss']}%",
-        parse_mode="Markdown"
-    )
+    try:
+        bal = await rpc_client.get_balance(Pubkey.from_string(data['wallet']))
+        sol = bal.value / 1e9
+        await update.message.reply_text(
+            f"📊 Wallet Status:\n"
+            f"Wallet: `{data['wallet']}`\n"
+            f"SOL: {sol:.6f}\n"
+            f"Slippage: {data['slippage']}%\n"
+            f"Stop-loss: {data['stoploss']}%",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Status error: {e}")
+        await update.message.reply_text("⚠️ Error fetching status. Try again later.")
 
 # Market Analysis Commands
 async def scan(update, ctx):
@@ -182,22 +253,34 @@ async def scan(update, ctx):
     min_change = 20
     for arg in args:
         if arg.startswith("min_volume="):
-            min_volume = float(arg.split("=")[1])
+            try:
+                min_volume = float(arg.split("=")[1])
+            except ValueError:
+                await update.message.reply_text("Invalid min_volume value.")
+                return
         elif arg.startswith("min_change="):
-            min_change = float(arg.split("=")[1])
+            try:
+                min_change = float(arg.split("=")[1])
+            except ValueError:
+                await update.message.reply_text("Invalid min_change value.")
+                return
     async with httpx.AsyncClient() as client:
-        url = "https://api.dexscreener.com/latest/dex/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
+        url = f"{DEX_SCREENER_BASE_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
         tokens = await fetch_tokens(client, url)
         candidates = [
             t for t in tokens
             if t.get('priceChange', {}).get('h1', 0) > min_change and t.get('volume', {}).get('h24', 0) > min_volume
         ]
         if not candidates:
-            await update.message.reply_text("No high-potential tokens found with the given filters.")
+            await update.message.reply_text("No high-potential tokens found. Try adjusting filters or check later.")
             return
         reply = "🔍 Potential 10x Tokens:\n"
         for t in candidates[:5]:
-            reply += f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}, 1h: {t.get('priceChange', {}).get('h1', 'N/A')}%\nhttps://pump.fun/{t.get('baseToken', {}).get('address', 'N/A')}"
+            reply += (
+                f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}\n"
+                f"1h: {t.get('priceChange', {}).get('h1', 'N/A')}%, 24h: {t.get('priceChange', {}).get('h24', 'N/A')}%\n"
+                f"https://pump.fun/{t.get('baseToken', {}).get('address', 'N/A')}"
+            )
         await update.message.reply_text(reply)
 
 async def topgainers(update, ctx):
@@ -208,52 +291,70 @@ async def topgainers(update, ctx):
         if timeframe not in ["h1", "h6", "h24"]:
             return await update.message.reply_text("Invalid timeframe. Use h1, h6, or h24.")
     async with httpx.AsyncClient() as client:
-        url = f"https://api.dexscreener.com/latest/dex/search/pairs?q=solana&sort=priceChange.{timeframe}&order=desc&limit=10"
+        url = f"{DEX_SCREENER_BASE_URL}/search/pairs?q=solana&sort=priceChange.{timeframe}&order=desc&limit=10"
         tokens = await fetch_tokens(client, url)
         if not tokens:
-            await update.message.reply_text("No top gainers available right now.")
+            await update.message.reply_text("No top gainers available right now. Try again later.")
             return
+        tokens.sort(key=lambda x: x.get('priceChange', {}).get(timeframe, 0), reverse=True)
         reply = f"🏆 Top Gainers ({timeframe}):\n"
         for t in tokens[:5]:
-            reply += f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}, {timeframe}: {t.get('priceChange', {}).get(timeframe, 'N/A')}%\nhttps://pump.fun/{t.get('baseToken', {}).get('address', 'N/A')}"
+            reply += (
+                f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}\n"
+                f"{timeframe}: {t.get('priceChange', {}).get(timeframe, 'N/A')}%\n"
+                f"https://pump.fun/{t.get('baseToken', {}).get('address', 'N/A')}"
+            )
         await update.message.reply_text(reply)
 
 async def price(update, ctx):
     """Get the current price and details of a specific token."""
     if not ctx.args:
-        return await update.message.reply_text("Usage: /price <token_address>")
+        return await update.message.reply_text("Usage: /price <token_address>, e.g., /price So11111111111111111111111111111111111111112")
     mint = ctx.args[0]
+    try:
+        Pubkey.from_string(mint)
+    except:
+        return await update.message.reply_text("Invalid token address.")
     async with httpx.AsyncClient() as client:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
+        url = f"{DEX_SCREENER_BASE_URL}/tokens/{mint}"
         tokens = await fetch_tokens(client, url)
         if not tokens:
-            await update.message.reply_text("Token not found.")
+            await update.message.reply_text("Token not found or API error. Try again later.")
             return
-        token = tokens[0]  # Assuming single token response
+        token = tokens[0]
         liquidity = token.get('liquidity', {}).get('usd', 'N/A')
         market_cap = token.get('fdv', 'N/A')
+        keyboard = [
+            [InlineKeyboardButton("Chart", url=f"https://dexscreener.com/solana/{mint}")]]
         await update.message.reply_text(
             f"💰 {token.get('baseToken', {}).get('symbol', 'N/A')} — ${token.get('priceUsd', 'N/A')}\n"
             f"24h Change: {token.get('priceChange', {}).get('h24', 'N/A')}%\n"
             f"Liquidity: ${liquidity}\n"
-            f"Market Cap: ${market_cap}\n"
-            f"https://pump.fun/{mint}"
+            f"Market Cap: ${market_cap}\n",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
 async def launch(update, ctx):
     """Analyze a token's launch details."""
     if not ctx.args:
-        return await update.message.reply_text("Usage: /launch <token_address>")
+        return await update.message.reply_text("Usage: /launch <token_address>, e.g., /launch So11111111111111111111111111111111111111112")
     mint = ctx.args[0]
+    try:
+        Pubkey.from_string(mint)
+    except:
+        return await update.message.reply_text("Invalid token address.")
     async with httpx.AsyncClient() as client:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
+        url = f"{DEX_SCREENER_BASE_URL}/tokens/{mint}"
         tokens = await fetch_tokens(client, url)
         if not tokens:
-            await update.message.reply_text("Token not found.")
+            await update.message.reply_text("Token not found or API error. Try again later.")
             return
-        token = tokens[0]  # Assuming single token response
+        token = tokens[0]
         liquidity = token.get('liquidity', {}).get('usd', 'N/A')
         market_cap = token.get('fdv', 'N/A')
+        created_at = token.get('pairCreatedAt', 'N/A')
+        keyboard = [
+            [InlineKeyboardButton("Chart", url=f"https://dexscreener.com/solana/{mint}")]]
         await update.message.reply_text(
             f"🚀 {token.get('baseToken', {}).get('symbol', 'N/A')} Launch Analysis:\n"
             f"Price: ${token.get('priceUsd', 'N/A')}\n"
@@ -261,20 +362,21 @@ async def launch(update, ctx):
             f"1h Change: {token.get('priceChange', {}).get('h1', 'N/A')}%\n"
             f"Liquidity: ${liquidity}\n"
             f"Market Cap: ${market_cap}\n"
-            f"https://pump.fun/{mint}"
+            f"Created: {datetime.fromtimestamp(created_at/1000).strftime('%Y-%m-%d %H:%M UTC') if created_at != 'N/A' else 'N/A'}\n",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
 async def snipe(update, ctx):
     """Identify the best tokens to snipe in the next hour."""
     async with httpx.AsyncClient() as client:
-        url = "https://api.dexscreener.com/latest/dex/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
+        url = f"{DEX_SCREENER_BASE_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
         tokens = await fetch_tokens(client, url)
         candidates = [
             t for t in tokens
             if t.get('priceChange', {}).get('h1', 0) > 15 and t.get('volume', {}).get('h24', 0) > 150000
         ]
         if not candidates:
-            await update.message.reply_text("No sniper targets found right now. Check later.")
+            await update.message.reply_text("No sniper targets found right now. Check later or try /scan with different filters.")
             return
         now = datetime.utcnow()
         reply = "🎯 Best sniper targets (next hour):\n"
@@ -284,7 +386,11 @@ async def snipe(update, ctx):
             vol = t.get('volume', {}).get('h24', 'N/A')
             mint = t.get('baseToken', {}).get('address', 'N/A')
             entry = now + timedelta(minutes=5)
-            reply += f"\n{symbol} — ${price}, Vol: ${vol}, Entry: {entry.strftime('%H:%M:%S UTC')}\nhttps://pump.fun/{mint}"
+            reply += (
+                f"\n{symbol} — ${price}, Vol: ${vol}\n"
+                f"Entry: {entry.strftime('%H:%M:%S UTC')}\n"
+                f"https://pump.fun/{mint}"
+            )
         await update.message.reply_text(reply)
 
 async def sell(update, ctx):
@@ -292,17 +398,26 @@ async def sell(update, ctx):
     data = load_data().get(str(update.effective_user.id))
     if not data:
         return await update.message.reply_text("Link with /register.")
-    await update.message.reply_text(
-        f"💸 Sell Strategy:\n"
-        f"Slippage: {data['slippage']}%\n"
-        f"Stop-loss: {data['stoploss']}%\n"
-        f"Selling insights coming soon!"
-    )
+    try:
+        bal = await rpc_client.get_balance(Pubkey.from_string(data['wallet']))
+        sol = bal.value / 1e9
+        if sol < 0.01:
+            return await update.message.reply_text("Low SOL balance. Add funds to trade.")
+        await update.message.reply_text(
+            f"💸 Sell Strategy:\n"
+            f"Slippage: {data['slippage']}%\n"
+            f"Stop-loss: {data['stoploss']}%\n"
+            f"Balance: {sol:.6f} SOL\n"
+            f"Consider selling if price drops below stop-loss or market conditions change."
+        )
+    except Exception as e:
+        logger.error(f"Sell error: {e}")
+        await update.message.reply_text("⚠️ Error fetching sell strategy. Try again later.")
 
 async def set_slippage(update, ctx):
     """Set the maximum slippage percentage."""
     if not ctx.args:
-        return await update.message.reply_text("Usage: /set_slippage <percentage>")
+        return await update.message.reply_text("Usage: /set_slippage <percentage>, e.g., /set_slippage 2.5")
     data = load_data()
     uid = str(update.effective_user.id)
     if uid not in data:
@@ -320,7 +435,7 @@ async def set_slippage(update, ctx):
 async def set_stoploss(update, ctx):
     """Set the stop-loss percentage."""
     if not ctx.args:
-        return await update.message.reply_text("Usage: /set_stoploss <percentage>")
+        return await update.message.reply_text("Usage: /set_stoploss <percentage>, e.g., /set_stoploss 10")
     data = load_data()
     uid = str(update.effective_user.id)
     if uid not in data:
@@ -335,54 +450,156 @@ async def set_stoploss(update, ctx):
     save_data(data)
     await update.message.reply_text(f"Stop-loss set to {stoploss}%")
 
+async def watch_token(update, ctx):
+    """Add a token to the user's watchlist."""
+    if not ctx.args:
+        return await update.message.reply_text("Usage: /watch <token_address>")
+    mint = ctx.args[0]
+    try:
+        Pubkey.from_string(mint)
+    except:
+        return await update.message.reply_text("Invalid token address.")
+    watchlist = load_watchlist()
+    uid = str(update.effective_user.id)
+    watchlist.setdefault(uid, [])
+    if mint in watchlist[uid]:
+        await update.message.reply_text("Token already in your watchlist.")
+        return
+    watchlist[uid].append(mint)
+    save_watchlist(watchlist)
+    await update.message.reply_text(f"✅ Token added to watchlist: `{mint}`", parse_mode="Markdown")
+
+async def show_watchlist(update, ctx):
+    """Display the user's watchlist."""
+    watchlist = load_watchlist()
+    uid = str(update.effective_user.id)
+    tokens = watchlist.get(uid, [])
+    if not tokens:
+        await update.message.reply_text("Your watchlist is empty. Add tokens with /watch.")
+        return
+    reply = "👀 Your Watchlist:\n"
+    for i, mint in enumerate(tokens, 1):
+        reply += f"{i}. `{mint}`\n"
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
+    """Periodically check watchlist tokens for price changes."""
+    logger.info("🔔 Running watchlist check...")
+    watchlist = load_watchlist()
+    async with httpx.AsyncClient() as client:
+        for uid, tokens in watchlist.items():
+            for mint in tokens:
+                try:
+                    url = f"{DEX_SCREENER_BASE_URL}/tokens/{mint}"
+                    tokens_data = await fetch_tokens(client, url)
+                    if not tokens_data:
+                        continue
+                    token = tokens_data[0]
+                    price_change = token.get('priceChange', {}).get('h1', 0)
+                    if abs(price_change) > 10:
+                        await context.bot.send_message(
+                            chat_id=uid,
+                            text=(
+                                f"🔔 Watchlist Alert: {token.get('baseToken', {}).get('symbol', 'N/A')}\n"
+                                f"Price: ${token.get('priceUsd', 'N/A')}\n"
+                                f"1h Change: {price_change}%"
+                            )
+                        )
+                except Exception as e:
+                    logger.error(f"Watchlist check error for {mint}: {e}")
+
+# === BUTTON HANDLER ===
+async def button_handler(update, ctx):
+    """Handle inline keyboard button presses."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "cancel_register":
+        await query.edit_message_text("❌ Registration canceled.")
+
 # === MAIN FUNCTION ===
-def main():
+async def main():
     """Initialize and run the bot."""
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    conv = ConversationHandler(
-        entry_points=[CommandHandler('register', register_start)],
-        states={REGISTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive)]},
-        fallbacks=[CommandHandler('cancel', register_cancel)]
-    )
-    # Add all handlers
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('help', help_command))
-    app.add_handler(conv)
-    app.add_handler(CommandHandler('wallets', wallets))
-    app.add_handler(CommandHandler('balance', balance))
-    app.add_handler(CommandHandler('portfolio', portfolio))
-    app.add_handler(CommandHandler('history', history))
-    app.add_handler(CommandHandler('status', status))
-    app.add_handler(CommandHandler('scan', scan))
-    app.add_handler(CommandHandler('topgainers', topgainers))
-    app.add_handler(CommandHandler('price', price))
-    app.add_handler(CommandHandler('launch', launch))
-    app.add_handler(CommandHandler('snipe', snipe))
-    app.add_handler(CommandHandler('sell', sell))
-    app.add_handler(CommandHandler('set_slippage', set_slippage))
-    app.add_handler(CommandHandler('set_stoploss', set_stoploss))
-    
-    # Register all commands with Telegram
-    app.bot.set_my_commands([
-        BotCommand("start", "Welcome"),
-        BotCommand("help", "Commands"),
-        BotCommand("register", "Link wallet"),
-        BotCommand("wallets", "Show wallet"),
-        BotCommand("balance", "SOL balance"),
-        BotCommand("portfolio", "Portfolio overview"),
-        BotCommand("history", "Recent txs"),
-        BotCommand("status", "Wallet status"),
-        BotCommand("scan", "Scan 10x tokens"),
-        BotCommand("topgainers", "Top gainers"),
-        BotCommand("price", "Token price"),
-        BotCommand("launch", "Analyze launch"),
-        BotCommand("snipe", "Sniping target"),
-        BotCommand("sell", "Sell strategy"),
-        BotCommand("set_slippage", "Set slippage"),
-        BotCommand("set_stoploss", "Set stop-loss")
-    ])
-    logger.info("🚀 UltimateTraderBot online")
-    app.run_polling()
+    try:
+        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        if not app.bot:
+            logger.error("Failed to initialize bot. Check TELEGRAM_TOKEN.")
+            return
+
+        # Define conversation handler
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('register', register_start)],
+            states={
+                REGISTER: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive),
+                    CallbackQueryHandler(register_cancel, pattern="^cancel_register$")
+                ]
+            },
+            fallbacks=[CommandHandler('cancel', register_cancel)],
+            per_message=True
+        )
+
+        # Register command handlers
+        command_handlers = [
+            CommandHandler('start', start),
+            CommandHandler('help', help_command),
+            conv_handler,
+            CommandHandler('wallets', wallets),
+            CommandHandler('balance', balance),
+            CommandHandler('portfolio', portfolio),
+            CommandHandler('history', history),
+            CommandHandler('status', status),
+            CommandHandler('scan', scan),
+            CommandHandler('topgainers', topgainers),
+            CommandHandler('price', price),
+            CommandHandler('launch', launch),
+            CommandHandler('snipe', snipe),
+            CommandHandler('sell', sell),
+            CommandHandler('set_slippage', set_slippage),
+            CommandHandler('set_stoploss', set_stoploss),
+            CommandHandler('watch', watch_token),
+            CommandHandler('watchlist', show_watchlist)
+        ]
+
+        for handler in command_handlers:
+            app.add_handler(handler)
+
+        app.add_handler(CallbackQueryHandler(button_handler))
+
+        # Schedule watchlist check every 5 minutes
+        job_queue = app.job_queue
+        job_queue.run_repeating(check_watchlist, interval=300, first=10)
+
+        # Define bot commands
+        commands = [
+            BotCommand("start", "Welcome"),
+            BotCommand("help", "Commands"),
+            BotCommand("register", "Link wallet"),
+            BotCommand("wallets", "Show wallet"),
+            BotCommand("balance", "SOL balance"),
+            BotCommand("portfolio", "Portfolio overview"),
+            BotCommand("history", "Recent txs"),
+            BotCommand("status", "Wallet status"),
+            BotCommand("scan", "Scan 10x tokens"),
+            BotCommand("topgainers", "Top gainers"),
+            BotCommand("price", "Token price"),
+            BotCommand("launch", "Analyze launch"),
+            BotCommand("snipe", "Sniping target"),
+            BotCommand("sell", "Sell strategy"),
+            BotCommand("set_slippage", "Set slippage"),
+            BotCommand("set_stoploss", "Set stop-loss"),
+            BotCommand("watch", "Add to watchlist"),
+            BotCommand("watchlist", "View watchlist")
+        ]
+        await app.bot.set_my_commands(commands)
+
+        logger.info("🚀 UltimateTraderBot online")
+        await app.run_polling()
+
+    except Conflict as e:
+        logger.error(f"Bot conflict detected: {e}. Another instance may be running.")
+    except Exception as e:
+        logger.error(f"Unexpected error in main: {e}")
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
