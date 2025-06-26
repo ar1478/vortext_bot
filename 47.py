@@ -334,4 +334,20 @@ def main():
         BotCommand("register", "Link wallet"),
         BotCommand("wallets", "Show wallet"),
         BotCommand("balance", "SOL balance"),
-        BotCommand("portfolio", "Portfolio overview
+        BotCommand("portfolio", "Portfolio overview"),
+        BotCommand("history", "Recent txs"),
+        BotCommand("status", "Wallet status"),
+        BotCommand("scan", "Scan 10x tokens"),
+        BotCommand("topgainers", "Top gainers"),
+        BotCommand("price", "Token price"),
+        BotCommand("launch", "Analyze launch"),
+        BotCommand("snipe", "Sniping target"),
+        BotCommand("sell", "Sell strategy"),
+        BotCommand("set_slippage", "Set slippage"),
+        BotCommand("set_stoploss", "Set stop-loss")
+    ])
+    logger.info("🚀 UltimateTraderBot online")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
