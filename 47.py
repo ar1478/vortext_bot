@@ -85,6 +85,11 @@ async def fetch_tokens(client, url):
 
 # === COMMAND HANDLERS ===
 
+async def set_alert(update, ctx):
+    """Placeholder for /alert command."""
+    await update.message.reply_text("🚧 The /alert feature is coming soon!")
+
+
 async def unwatch_token(update, ctx):
     """Remove a token from the user's watchlist."""
     if not ctx.args:
