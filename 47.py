@@ -1,4 +1,3 @@
-# vortex_bot.py — Enhanced Telegram Meme Coin Trading Bot
 import os, json, logging, httpx, re, asyncio
 from datetime import datetime, timedelta
 from solders.pubkey import Pubkey
@@ -27,6 +26,7 @@ logger = logging.getLogger(__name__)
 # RPC Client
 rpc_client = AsyncClient(SOLANA_RPC_URL, commitment=Confirmed)
 REGISTER = 1
+
 # === USER STORAGE & SETTINGS ===
 def load_data():
     try:
@@ -540,7 +540,7 @@ def main():
         CommandHandler('scan', scan),
         CommandHandler('topgainers', topgainers),
         CommandHandler('price', price),
-        CommandHandler('launch', analyze_launch),
+        CommandHandler('launch', launch),  # Fixed from analyze_launch to launch
         CommandHandler('snipe', snipe),
         CommandHandler('sell', sell),
         CommandHandler('watch', watch_token),
