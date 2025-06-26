@@ -22,7 +22,7 @@ if not TELEGRAM_TOKEN:
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 DATA_FILE = "user_data.json"
 WATCHLIST_FILE = "watchlist.json"
-DEX_SCREENER_BASE_URL = "https://api.dexscreener.com/latest/dex"
+DEX_SCREENER_URL = "https://api.dexscreener.com/latest"
 
 # === LOGGING ===
 logging.basicConfig(
@@ -265,7 +265,7 @@ async def scan(update, ctx):
                 await update.message.reply_text("Invalid min_change value.")
                 return
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_BASE_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
+        url = f"{DEX_SCREENER_URL}/dex/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
         tokens = await fetch_tokens(client, url)
         candidates = [
             t for t in tokens
@@ -291,7 +291,7 @@ async def topgainers(update, ctx):
         if timeframe not in ["h1", "h6", "h24"]:
             return await update.message.reply_text("Invalid timeframe. Use h1, h6, or h24.")
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_BASE_URL}/search/pairs?q=solana&sort=priceChange.{timeframe}&order=desc&limit=10"
+        url = f"{DEX_SCREENER_URL}/dex/search/pairs?q=solana&sort=priceChange.{timeframe}&order=desc&limit=10"
         tokens = await fetch_tokens(client, url)
         if not tokens:
             await update.message.reply_text("No top gainers available right now. Try again later.")
@@ -316,7 +316,7 @@ async def price(update, ctx):
     except:
         return await update.message.reply_text("Invalid token address.")
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_BASE_URL}/tokens/{mint}"
+        url = f"{DEX_SCREENER_URL}/dex/tokens/{mint}"
         tokens = await fetch_tokens(client, url)
         if not tokens:
             await update.message.reply_text("Token not found or API error. Try again later.")
@@ -344,7 +344,7 @@ async def launch(update, ctx):
     except:
         return await update.message.reply_text("Invalid token address.")
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_BASE_URL}/tokens/{mint}"
+        url = f"{DEX_SCREENER_URL}/dex/tokens/{mint}"
         tokens = await fetch_tokens(client, url)
         if not tokens:
             await update.message.reply_text("Token not found or API error. Try again later.")
@@ -369,7 +369,7 @@ async def launch(update, ctx):
 async def snipe(update, ctx):
     """Identify the best tokens to snipe in the next hour."""
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_BASE_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
+        url = f"{DEX_SCREENER_URL}/dex/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
         tokens = await fetch_tokens(client, url)
         candidates = [
             t for t in tokens
@@ -412,7 +412,7 @@ async def sell(update, ctx):
         )
     except Exception as e:
         logger.error(f"Sell error: {e}")
-        await update.message.reply_text("⚠️ Error fetching sell strategy. Try again later.")
+        await update.message.reply_text("⚠️ Error fetching sell data. Try again later.")
 
 async def set_slippage(update, ctx):
     """Set the maximum slippage percentage."""
@@ -490,7 +490,7 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
         for uid, tokens in watchlist.items():
             for mint in tokens:
                 try:
-                    url = f"{DEX_SCREENER_BASE_URL}/tokens/{mint}"
+                    url = f"{DEX_SCREENER_URL}/dex/tokens/{mint}"
                     tokens_data = await fetch_tokens(client, url)
                     if not tokens_data:
                         continue
@@ -516,6 +516,12 @@ async def button_handler(update, ctx):
     data = query.data
     if data == "cancel_register":
         await query.edit_message_text("❌ Registration canceled.")
+
+# === POST-INIT FUNCTION ===
+async def post_init(application):
+    """Initialize periodic tasks after bot startup."""
+    job_queue = application.job_queue
+    job_queue.run_repeating(check_watchlist, interval=300, first=10)  # Check every 5 minutes
 
 # === MAIN FUNCTION ===
 async def main():
@@ -566,10 +572,6 @@ async def main():
 
         app.add_handler(CallbackQueryHandler(button_handler))
 
-        # Schedule watchlist check every 5 minutes
-        job_queue = app.job_queue
-        job_queue.run_repeating(check_watchlist, interval=300, first=10)
-
         # Define bot commands
         commands = [
             BotCommand("start", "Welcome"),
@@ -593,13 +595,21 @@ async def main():
         ]
         await app.bot.set_my_commands(commands)
 
+        # Set post_init callback
+        app.post_init = post_init
+
+        # Start the bot
+        await app.initialize()
+        await app.start()
         logger.info("🚀 UltimateTraderBot online")
         await app.run_polling()
 
     except Conflict as e:
-        logger.error(f"Bot conflict detected: {e}. Another instance may be running.")
+        logger.error(f"Bot conflict error: {e}. Another instance may be running.")
     except Exception as e:
         logger.error(f"Unexpected error in main: {e}")
+    finally:
+        await app.stop()
 
 if __name__ == '__main__':
     asyncio.run(main())
