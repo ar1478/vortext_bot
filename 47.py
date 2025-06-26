@@ -148,6 +148,22 @@ async def status(update, ctx):
     )
 
 # Enhanced Scan Command with Filters
+async def fetch_tokens(client, url):
+    try:
+        response = await client.get(url)
+        response.raise_for_status()  # Raise an error for bad status codes
+        return response.json().get("pairs", []) or response.json().get("tokens", [])
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error fetching tokens: {e}")
+        return []
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON response from {url}")
+        return []
+    except Exception as e:
+        logger.error(f"Unexpected error fetching tokens: {e}")
+        return []
+
+# Enhanced Scan Command with Filters
 async def scan(update, ctx):
     args = ctx.args
     min_volume = 100000
@@ -158,19 +174,20 @@ async def scan(update, ctx):
         elif arg.startswith("min_change="):
             min_change = float(arg.split("=")[1])
     async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=volume.h24&order=desc&limit=50")
-        tokens = response.json().get("tokens", [])
-    candidates = [
-        t for t in tokens
-        if t.get('priceChange', {}).get('h1', 0) > min_change and t['volume']['h24'] > min_volume
-    ]
-    if not candidates:
-        await update.message.reply_text("No high-potential tokens found with the given filters.")
-        return
-    reply = "🔍 Potential 10x Tokens:\n"
-    for t in candidates[:5]:
-        reply += f"\n{t['symbol']} — ${t['priceUsd']}, 1h: {t['priceChange']['h1']}%\nhttps://pump.fun/{t['address']}"
-    await update.message.reply_text(reply)
+        # Updated endpoint to use token-pairs/v1 with chainId
+        url = "https://api.dexscreener.com/latest/dex/token-pairs/v1/chain/solana"
+        tokens = await fetch_tokens(client, url)
+        candidates = [
+            t for t in tokens
+            if t.get('priceChange', {}).get('h1', 0) > min_change and t.get('volume', {}).get('h24', 0) > min_volume
+        ]
+        if not candidates:
+            await update.message.reply_text("No high-potential tokens found with the given filters.")
+            return
+        reply = "🔍 Potential 10x Tokens:\n"
+        for t in candidates[:5]:
+            reply += f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}, 1h: {t.get('priceChange', {}).get('h1', 'N/A')}%\nhttps://pump.fun/{t.get('address')}"
+        await update.message.reply_text(reply)
 
 # Enhanced Top Gainers Command with Timeframe
 async def topgainers(update, ctx):
@@ -180,15 +197,16 @@ async def topgainers(update, ctx):
         if timeframe not in ["h1", "h6", "h24"]:
             return await update.message.reply_text("Invalid timeframe. Use h1, h6, or h24.")
     async with httpx.AsyncClient() as client:
-        response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=priceChange.{timeframe}&order=desc&limit=10")
-        tokens = response.json().get("tokens", [])
-    if not tokens:
-        await update.message.reply_text("No top gainers available right now.")
-        return
-    reply = f"🏆 Top Gainers ({timeframe}):\n"
-    for t in tokens[:5]:
-        reply += f"\n{t['symbol']} — ${t['priceUsd']}, {timeframe}: {t['priceChange'][timeframe]}%\nhttps://pump.fun/{t['address']}"
-    await update.message.reply_text(reply)
+        # Updated endpoint to use token-pairs/v1 with sorting
+        url = f"https://api.dexscreener.com/latest/dex/token-pairs/v1/chain/solana?sort=priceChange.{timeframe}&order=desc&limit=10"
+        tokens = await fetch_tokens(client, url)
+        if not tokens:
+            await update.message.reply_text("No top gainers available right now.")
+            return
+        reply = f"🏆 Top Gainers ({timeframe}):\n"
+        for t in tokens[:5]:
+            reply += f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}, {timeframe}: {t.get('priceChange', {}).get(timeframe, 'N/A')}%\nhttps://pump.fun/{t.get('address')}"
+        await update.message.reply_text(reply)
 
 # Enhanced Price Command with More Details
 async def price(update, ctx):
@@ -196,20 +214,22 @@ async def price(update, ctx):
         return await update.message.reply_text("Usage: /price <token_address>")
     mint = ctx.args[0]
     async with httpx.AsyncClient() as client:
-        response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
-        token = response.json().get("tokens", [{}])[0]
-    if not token:
-        await update.message.reply_text("Token not found.")
-        return
-    liquidity = token.get('liquidity', {}).get('usd', 'N/A')
-    market_cap = token.get('fdv', 'N/A')
-    await update.message.reply_text(
-        f"💰 {token['symbol']} — ${token['priceUsd']}\n"
-        f"24h Change: {token['priceChange']['h24']}%\n"
-        f"Liquidity: ${liquidity}\n"
-        f"Market Cap: ${market_cap}\n"
-        f"https://pump.fun/{mint}"
-    )
+        # Updated endpoint to use token-pairs/v1 for specific token
+        url = f"https://api.dexscreener.com/latest/dex/token-pairs/v1/chain/solana/{mint}"
+        tokens = await fetch_tokens(client, url)
+        if not tokens:
+            await update.message.reply_text("Token not found.")
+            return
+        token = tokens[0]  # Assuming single token response
+        liquidity = token.get('liquidity', {}).get('usd', 'N/A')
+        market_cap = token.get('fdv', 'N/A')
+        await update.message.reply_text(
+            f"💰 {token.get('baseToken', {}).get('symbol', 'N/A')} — ${token.get('priceUsd', 'N/A')}\n"
+            f"24h Change: {token.get('priceChange', {}).get('h24', 'N/A')}%\n"
+            f"Liquidity: ${liquidity}\n"
+            f"Market Cap: ${market_cap}\n"
+            f"https://pump.fun/{mint}"
+        )
 
 # Enhanced Launch Command with More Details
 async def launch(update, ctx):
@@ -217,44 +237,47 @@ async def launch(update, ctx):
         return await update.message.reply_text("Usage: /launch <token_address>")
     mint = ctx.args[0]
     async with httpx.AsyncClient() as client:
-        response = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{mint}")
-        token = response.json().get("tokens", [{}])[0]
-    if not token:
-        await update.message.reply_text("Token not found.")
-        return
-    liquidity = token.get('liquidity', {}).get('usd', 'N/A')
-    market_cap = token.get('fdv', 'N/A')
-    await update.message.reply_text(
-        f"🚀 {token['symbol']} Launch Analysis:\n"
-        f"Price: ${token['priceUsd']}\n"
-        f"Volume (24h): ${token['volume']['h24']}\n"
-        f"1h Change: {token['priceChange']['h1']}%\n"
-        f"Liquidity: ${liquidity}\n"
-        f"Market Cap: ${market_cap}\n"
-        f"https://pump.fun/{mint}"
-    )
+        # Updated endpoint to use token-pairs/v1 for specific token
+        url = f"https://api.dexscreener.com/latest/dex/token-pairs/v1/chain/solana/{mint}"
+        tokens = await fetch_tokens(client, url)
+        if not tokens:
+            await update.message.reply_text("Token not found.")
+            return
+        token = tokens[0]  # Assuming single token response
+        liquidity = token.get('liquidity', {}).get('usd', 'N/A')
+        market_cap = token.get('fdv', 'N/A')
+        await update.message.reply_text(
+            f"🚀 {token.get('baseToken', {}).get('symbol', 'N/A')} Launch Analysis:\n"
+            f"Price: ${token.get('priceUsd', 'N/A')}\n"
+            f"Volume (24h): ${token.get('volume', {}).get('h24', 'N/A')}\n"
+            f"1h Change: {token.get('priceChange', {}).get('h1', 'N/A')}%\n"
+            f"Liquidity: ${liquidity}\n"
+            f"Market Cap: ${market_cap}\n"
+            f"https://pump.fun/{mint}"
+        )
 
 async def snipe(update, ctx):
     async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.dexscreener.com/latest/dex/tokens?chainIds=solana&sort=volume.h24&order=desc&limit=50")
-        tokens = response.json().get("tokens", [])
-    candidates = [
-        t for t in tokens
-        if t.get('priceChange', {}).get('h1', 0) > 15 and t['volume']['h24'] > 150000
-    ]
-    if not candidates:
-        await update.message.reply_text("No sniper targets found right now. Check later.")
-        return
-    now = datetime.utcnow()
-    reply = "🎯 Best sniper targets (next hour):\n"
-    for t in candidates[:5]:
-        symbol = t['symbol']
-        price = t['priceUsd']
-        vol = t['volume']['h24']
-        mint = t['address']
-        entry = now + timedelta(minutes=5)
-        reply += f"\n{symbol} — ${price}, Vol: ${vol}, Entry: {entry.strftime('%H:%M:%S UTC')}\nhttps://pump.fun/{mint}"
-    await update.message.reply_text(reply)
+        # Updated endpoint to use token-pairs/v1 with volume sort
+        url = "https://api.dexscreener.com/latest/dex/token-pairs/v1/chain/solana?sort=volume.h24&order=desc&limit=50"
+        tokens = await fetch_tokens(client, url)
+        candidates = [
+            t for t in tokens
+            if t.get('priceChange', {}).get('h1', 0) > 15 and t.get('volume', {}).get('h24', 0) > 150000
+        ]
+        if not candidates:
+            await update.message.reply_text("No sniper targets found right now. Check later.")
+            return
+        now = datetime.utcnow()
+        reply = "🎯 Best sniper targets (next hour):\n"
+        for t in candidates[:5]:
+            symbol = t.get('baseToken', {}).get('symbol', 'N/A')
+            price = t.get('priceUsd', 'N/A')
+            vol = t.get('volume', {}).get('h24', 'N/A')
+            mint = t.get('address')
+            entry = now + timedelta(minutes=5)
+            reply += f"\n{symbol} — ${price}, Vol: ${vol}, Entry: {entry.strftime('%H:%M:%S UTC')}\nhttps://pump.fun/{mint}"
+        await update.message.reply_text(reply)
 
 async def sell(update, ctx):
     data = load_data().get(str(update.effective_user.id))
