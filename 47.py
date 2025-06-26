@@ -1,40 +1,32 @@
-import os
-import json
-import logging
-import asyncio
-import re
+# vortex_bot.py — Enhanced Telegram Meme Coin Trading Bot
+import os, json, logging, httpx, re, asyncio
 from datetime import datetime, timedelta
 from solders.pubkey import Pubkey
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, ConversationHandler
-)
+from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
+                          ContextTypes, filters, ConversationHandler, CallbackQueryHandler)
 from telegram.error import Conflict
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Confirmed
-import httpx
 
-# === CONFIGURATION ===
+# Config
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN environment variable is required")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 DATA_FILE = "user_data.json"
 WATCHLIST_FILE = "watchlist.json"
-DEX_SCREENER_URL = "https://api.dexscreener.com/latest"
+DEX_SCREENER_URL = "https://api.dexscreener.com/latest/dex"
 
-# === LOGGING ===
+# Logging
 logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s",
     level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
-# === SOLANA CLIENT ===
+# RPC Client
 rpc_client = AsyncClient(SOLANA_RPC_URL, commitment=Confirmed)
-
+REGISTER = 1
 # === USER STORAGE & SETTINGS ===
 def load_data():
     try:
@@ -524,92 +516,65 @@ async def post_init(application):
     job_queue.run_repeating(check_watchlist, interval=300, first=10)  # Check every 5 minutes
 
 # === MAIN FUNCTION ===
-async def main():
-    """Initialize and run the bot."""
-    try:
-        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-        if not app.bot:
-            logger.error("Failed to initialize bot. Check TELEGRAM_TOKEN.")
-            return
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # Registration convo
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('register', register_start)],
+        states={REGISTER: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive),
+            CallbackQueryHandler(register_cancel, pattern="^cancel_register$")
+        ]},
+        fallbacks=[CommandHandler('cancel', register_cancel)]
+    )
 
-        # Define conversation handler
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('register', register_start)],
-            states={
-                REGISTER: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, register_receive),
-                    CallbackQueryHandler(register_cancel, pattern="^cancel_register$")
-                ]
-            },
-            fallbacks=[CommandHandler('cancel', register_cancel)],
-            per_message=True
-        )
+    # Register all commands
+    handlers = [
+        CommandHandler('start', start),
+        CommandHandler('help', help_command),
+        conv_handler,
+        CommandHandler('wallets', wallets),
+        CommandHandler('balance', balance),
+        CommandHandler('history', history),
+        CommandHandler('status', status),
+        CommandHandler('scan', scan),
+        CommandHandler('topgainers', topgainers),
+        CommandHandler('price', price),
+        CommandHandler('launch', analyze_launch),
+        CommandHandler('snipe', snipe),
+        CommandHandler('sell', sell),
+        CommandHandler('watch', watch_token),
+        CommandHandler('unwatch', unwatch_token),
+        CommandHandler('watchlist', show_watchlist),
+        CommandHandler('set_slippage', set_slippage),
+        CommandHandler('set_stoploss', set_stoploss),
+        CommandHandler('alert', set_alert)
+    ]
 
-        # Register command handlers
-        command_handlers = [
-            CommandHandler('start', start),
-            CommandHandler('help', help_command),
-            conv_handler,
-            CommandHandler('wallets', wallets),
-            CommandHandler('balance', balance),
-            CommandHandler('portfolio', portfolio),
-            CommandHandler('history', history),
-            CommandHandler('status', status),
-            CommandHandler('scan', scan),
-            CommandHandler('topgainers', topgainers),
-            CommandHandler('price', price),
-            CommandHandler('launch', launch),
-            CommandHandler('snipe', snipe),
-            CommandHandler('sell', sell),
-            CommandHandler('set_slippage', set_slippage),
-            CommandHandler('set_stoploss', set_stoploss),
-            CommandHandler('watch', watch_token),
-            CommandHandler('watchlist', show_watchlist)
-        ]
+    for h in handlers:
+        app.add_handler(h)
 
-        for handler in command_handlers:
-            app.add_handler(handler)
+    # Button callback
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-        app.add_handler(CallbackQueryHandler(button_handler))
+    # Set bot commands
+    cmds = [
+        ("start","Start bot"),("help","List commands"),("register","Link wallet"),
+        ("wallets","Show wallet"),("balance","SOL balance"),("history","Recent txs"),
+        ("status","Wallet summary"),("scan","Scan 10× tokens"),("topgainers","24h gainers"),
+        ("price","Token price"),("launch","Analyze token"),("snipe","Entry timing"),
+        ("sell","Exit analysis"),("watch","Add watch"),("unwatch","Remove watch"),
+        ("watchlist","View watchlist"),("set_slippage","Set slippage"),
+        ("set_stoploss","Set stop-loss"),("alert","Price alert")
+    ]
+    app.post_init(lambda app: app.bot.set_my_commands([BotCommand(c,d) for c,d in cmds]))
 
-        # Define bot commands
-        commands = [
-            BotCommand("start", "Welcome"),
-            BotCommand("help", "Commands"),
-            BotCommand("register", "Link wallet"),
-            BotCommand("wallets", "Show wallet"),
-            BotCommand("balance", "SOL balance"),
-            BotCommand("portfolio", "Portfolio overview"),
-            BotCommand("history", "Recent txs"),
-            BotCommand("status", "Wallet status"),
-            BotCommand("scan", "Scan 10x tokens"),
-            BotCommand("topgainers", "Top gainers"),
-            BotCommand("price", "Token price"),
-            BotCommand("launch", "Analyze launch"),
-            BotCommand("snipe", "Sniping target"),
-            BotCommand("sell", "Sell strategy"),
-            BotCommand("set_slippage", "Set slippage"),
-            BotCommand("set_stoploss", "Set stop-loss"),
-            BotCommand("watch", "Add to watchlist"),
-            BotCommand("watchlist", "View watchlist")
-        ]
-        await app.bot.set_my_commands(commands)
+    # Jobs
+    if app.job_queue:
+        app.job_queue.run_repeating(check_watchlist, interval=300, first=10)
 
-        # Set post_init callback
-        app.post_init = post_init
-
-        # Start the bot
-        await app.initialize()
-        await app.start()
-        logger.info("🚀 UltimateTraderBot online")
-        await app.run_polling()
-
-    except Conflict as e:
-        logger.error(f"Bot conflict error: {e}. Another instance may be running.")
-    except Exception as e:
-        logger.error(f"Unexpected error in main: {e}")
-    finally:
-        await app.stop()
+    logger.info("🚀 Vortex Bot running")
+    app.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
