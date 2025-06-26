@@ -84,6 +84,27 @@ async def fetch_tokens(client, url):
         return []
 
 # === COMMAND HANDLERS ===
+
+async def unwatch_token(update, ctx):
+    """Remove a token from the user's watchlist."""
+    if not ctx.args:
+        return await update.message.reply_text("Usage: /unwatch <token_address>")
+    mint = ctx.args[0]
+    try:
+        Pubkey.from_string(mint)
+    except:
+        return await update.message.reply_text("Invalid token address.")
+    watchlist = load_watchlist()
+    uid = str(update.effective_user.id)
+    tokens = watchlist.get(uid, [])
+    if mint not in tokens:
+        await update.message.reply_text("Token not in your watchlist.")
+        return
+    tokens.remove(mint)
+    watchlist[uid] = tokens
+    save_watchlist(watchlist)
+    await update.message.reply_text(f"❌ Token removed from watchlist: `{mint}`", parse_mode="Markdown")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message for the bot."""
     await update.message.reply_text(
