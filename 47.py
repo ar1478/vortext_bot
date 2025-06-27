@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # RPC Client
 rpc_client = AsyncClient(SOLANA_RPC_URL, commitment=Confirmed)
+
+# === STATES ===
 REGISTER = 1
 
 # === USER STORAGE & SETTINGS ===
@@ -62,9 +64,6 @@ def save_watchlist(watchlist):
     except Exception as e:
         logger.error(f"Watchlist save error: {e}")
 
-# === STATES ===
-REGISTER = 1
-
 # === HELPER FUNCTION FOR API CALLS ===
 async def fetch_tokens(client, url):
     """Fetch token data from DexScreener API with error handling."""
@@ -88,7 +87,6 @@ async def fetch_tokens(client, url):
 async def set_alert(update, ctx):
     """Placeholder for /alert command."""
     await update.message.reply_text("🚧 The /alert feature is coming soon!")
-
 
 async def unwatch_token(update, ctx):
     """Remove a token from the user's watchlist."""
@@ -216,7 +214,7 @@ async def portfolio(update, ctx):
         for acc in token_accounts.value:
             token_account = acc.pubkey
             balance = await rpc_client.get_token_account_balance(token_account)
-            mint = balance.value.mint
+            mint = acc.account.data.parsed['info']['mint']  # Fixed: get mint from account data
             amount = balance.value.ui_amount
             reply += f"- {mint}: {amount}\n"
         await update.message.reply_text(reply)
@@ -283,7 +281,7 @@ async def scan(update, ctx):
                 await update.message.reply_text("Invalid min_change value.")
                 return
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_URL}/dex/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
+        url = f"{DEX_SCREENER_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"  # Fixed URL
         tokens = await fetch_tokens(client, url)
         candidates = [
             t for t in tokens
@@ -297,7 +295,7 @@ async def scan(update, ctx):
             reply += (
                 f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}\n"
                 f"1h: {t.get('priceChange', {}).get('h1', 'N/A')}%, 24h: {t.get('priceChange', {}).get('h24', 'N/A')}%\n"
-                f"https://pump.fun/{t.get('baseToken', {}).get('address', 'N/A')}"
+                f"Address: {t.get('baseToken', {}).get('address', 'N/A')}"
             )
         await update.message.reply_text(reply)
 
@@ -309,7 +307,7 @@ async def topgainers(update, ctx):
         if timeframe not in ["h1", "h6", "h24"]:
             return await update.message.reply_text("Invalid timeframe. Use h1, h6, or h24.")
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_URL}/dex/search/pairs?q=solana&sort=priceChange.{timeframe}&order=desc&limit=10"
+        url = f"{DEX_SCREENER_URL}/search/pairs?q=solana&sort=priceChange.{timeframe}&order=desc&limit=10"  # Fixed URL
         tokens = await fetch_tokens(client, url)
         if not tokens:
             await update.message.reply_text("No top gainers available right now. Try again later.")
@@ -320,7 +318,7 @@ async def topgainers(update, ctx):
             reply += (
                 f"\n{t.get('baseToken', {}).get('symbol', 'N/A')} — ${t.get('priceUsd', 'N/A')}\n"
                 f"{timeframe}: {t.get('priceChange', {}).get(timeframe, 'N/A')}%\n"
-                f"https://pump.fun/{t.get('baseToken', {}).get('address', 'N/A')}"
+                f"Address: {t.get('baseToken', {}).get('address', 'N/A')}"
             )
         await update.message.reply_text(reply)
 
@@ -334,7 +332,7 @@ async def price(update, ctx):
     except:
         return await update.message.reply_text("Invalid token address.")
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_URL}/dex/tokens/{mint}"
+        url = f"{DEX_SCREENER_URL}/tokens/{mint}"  # Fixed URL
         tokens = await fetch_tokens(client, url)
         if not tokens:
             await update.message.reply_text("Token not found or API error. Try again later.")
@@ -362,7 +360,7 @@ async def launch(update, ctx):
     except:
         return await update.message.reply_text("Invalid token address.")
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_URL}/dex/tokens/{mint}"
+        url = f"{DEX_SCREENER_URL}/tokens/{mint}"  # Fixed URL
         tokens = await fetch_tokens(client, url)
         if not tokens:
             await update.message.reply_text("Token not found or API error. Try again later.")
@@ -373,6 +371,15 @@ async def launch(update, ctx):
         created_at = token.get('pairCreatedAt', 'N/A')
         keyboard = [
             [InlineKeyboardButton("Chart", url=f"https://dexscreener.com/solana/{mint}")]]
+        
+        # Fixed timestamp conversion
+        created_str = 'N/A'
+        if created_at != 'N/A' and created_at:
+            try:
+                created_str = datetime.fromtimestamp(created_at/1000).strftime('%Y-%m-%d %H:%M UTC')
+            except (ValueError, TypeError):
+                created_str = 'N/A'
+        
         await update.message.reply_text(
             f"🚀 {token.get('baseToken', {}).get('symbol', 'N/A')} Launch Analysis:\n"
             f"Price: ${token.get('priceUsd', 'N/A')}\n"
@@ -380,14 +387,14 @@ async def launch(update, ctx):
             f"1h Change: {token.get('priceChange', {}).get('h1', 'N/A')}%\n"
             f"Liquidity: ${liquidity}\n"
             f"Market Cap: ${market_cap}\n"
-            f"Created: {datetime.fromtimestamp(created_at/1000).strftime('%Y-%m-%d %H:%M UTC') if created_at != 'N/A' else 'N/A'}\n",
+            f"Created: {created_str}\n",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
 async def snipe(update, ctx):
     """Identify the best tokens to snipe in the next hour."""
     async with httpx.AsyncClient() as client:
-        url = f"{DEX_SCREENER_URL}/dex/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"
+        url = f"{DEX_SCREENER_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=50"  # Fixed URL
         tokens = await fetch_tokens(client, url)
         candidates = [
             t for t in tokens
@@ -407,7 +414,7 @@ async def snipe(update, ctx):
             reply += (
                 f"\n{symbol} — ${price}, Vol: ${vol}\n"
                 f"Entry: {entry.strftime('%H:%M:%S UTC')}\n"
-                f"https://pump.fun/{mint}"
+                f"Address: {mint}"
             )
         await update.message.reply_text(reply)
 
@@ -508,7 +515,7 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
         for uid, tokens in watchlist.items():
             for mint in tokens:
                 try:
-                    url = f"{DEX_SCREENER_URL}/dex/tokens/{mint}"
+                    url = f"{DEX_SCREENER_URL}/tokens/{mint}"  # Fixed URL
                     tokens_data = await fetch_tokens(client, url)
                     if not tokens_data:
                         continue
@@ -535,16 +542,15 @@ async def button_handler(update, ctx):
     if data == "cancel_register":
         await query.edit_message_text("❌ Registration canceled.")
 
-# === POST-INIT FUNCTION ===
-async def post_init(application):
-    """Initialize periodic tasks after bot startup."""
-    job_queue = application.job_queue
-    job_queue.run_repeating(check_watchlist, interval=300, first=10)  # Check every 5 minutes
-
 # === MAIN FUNCTION ===
 def main():
+    if not TELEGRAM_TOKEN:
+        logger.error("TELEGRAM_TOKEN environment variable not set!")
+        return
+    
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    # Registration convo
+    
+    # Registration conversation handler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('register', register_start)],
         states={REGISTER: [
@@ -561,12 +567,13 @@ def main():
         conv_handler,
         CommandHandler('wallets', wallets),
         CommandHandler('balance', balance),
+        CommandHandler('portfolio', portfolio),
         CommandHandler('history', history),
         CommandHandler('status', status),
         CommandHandler('scan', scan),
         CommandHandler('topgainers', topgainers),
         CommandHandler('price', price),
-        CommandHandler('launch', launch),  # Fixed from analyze_launch to launch
+        CommandHandler('launch', launch),
         CommandHandler('snipe', snipe),
         CommandHandler('sell', sell),
         CommandHandler('watch', watch_token),
@@ -583,23 +590,30 @@ def main():
     # Button callback
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Set bot commands
-    cmds = [
-        ("start","Start bot"),("help","List commands"),("register","Link wallet"),
-        ("wallets","Show wallet"),("balance","SOL balance"),("history","Recent txs"),
-        ("status","Wallet summary"),("scan","Scan 10× tokens"),("topgainers","24h gainers"),
-        ("price","Token price"),("launch","Analyze token"),("snipe","Entry timing"),
-        ("sell","Exit analysis"),("watch","Add watch"),("unwatch","Remove watch"),
-        ("watchlist","View watchlist"),("set_slippage","Set slippage"),
-        ("set_stoploss","Set stop-loss"),("alert","Price alert")
-    ]
-    app.post_init(lambda app: app.bot.set_my_commands([BotCommand(c,d) for c,d in cmds]))
+    # Set bot commands (async function)
+    async def set_commands():
+        cmds = [
+            ("start","Start bot"),("help","List commands"),("register","Link wallet"),
+            ("wallets","Show wallet"),("balance","SOL balance"),("portfolio","Show tokens"),
+            ("history","Recent txs"),("status","Wallet summary"),("scan","Scan 10× tokens"),
+            ("topgainers","24h gainers"),("price","Token price"),("launch","Analyze token"),
+            ("snipe","Entry timing"),("sell","Exit analysis"),("watch","Add watch"),
+            ("unwatch","Remove watch"),("watchlist","View watchlist"),
+            ("set_slippage","Set slippage"),("set_stoploss","Set stop-loss"),("alert","Price alert")
+        ]
+        await app.bot.set_my_commands([BotCommand(c,d) for c,d in cmds])
 
-    # Jobs
-    if app.job_queue:
-        app.job_queue.run_repeating(check_watchlist, interval=300, first=10)
+    # Set up post-init to handle async operations
+    async def post_init(application):
+        await set_commands()
+        # Set up periodic watchlist checking
+        job_queue = application.job_queue
+        if job_queue:
+            job_queue.run_repeating(check_watchlist, interval=300, first=10)
 
-    logger.info("🚀 Vortex Bot running")
+    app.post_init = post_init
+
+    logger.info("🚀 UltimateTraderBot starting...")
     app.run_polling()
 
 if __name__ == '__main__':
