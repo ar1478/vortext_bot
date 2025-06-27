@@ -702,7 +702,7 @@ def main():
         all_commands = [
             ("start", "Start bot"), ("help", "List commands"), ("register", "Link wallet"),
             ("balance", "SOL balance"), ("portfolio", "Show tokens"), ("status", "Wallet summary"),
-            ("scan", "Basic scan"), ("advanced_scan", "Advanced scanner"),
+             ("advanced_scan", "Advanced scanner"),
             ("sentiment", "Market sentiment"), ("whales", "Whale tracker"),
             ("alert", "Price alerts"), ("simulate", "Trade simulator"),
             ("watch", "Add to watchlist"), ("watchlist", "View watchlist")
