@@ -306,6 +306,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /sentiment - Market sentiment analysis
 /ai_analysis - AI-powered token analysis
 /simulate - Simulate trades
+/pumpfun - Scan trending Pump.fun tokens
+/bullx - Scan trending BullX.io assets
+/forex_rates - Forex exchange rates
+/forex_pairs - Major forex pairs
+/multiscan - Scan all platforms (Solana, Pump.fun, BullX, Forex)
 
 <b>Advanced Features</b>
 /portfolio_optimizer - AI portfolio optimization
