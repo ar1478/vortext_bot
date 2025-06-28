@@ -26,7 +26,12 @@ class Config:
     JUPITER_API_URL = "https://quote-api.jup.ag/v6"
     DEX_SCREENER_URL = "https://api.dexscreener.com/latest/dex"
     BIRDEYE_API_URL = "https://public-api.birdeye.so"
-    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
+    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY") 
+    # New platform integrations
+    PUMP_FUN_API_URL = "https://api.pump.fun"
+    BULLX_API_URL = "https://api.bullx.io/v1"
+    FOREX_API_URL = "https://api.apilayer.com/exchangerates_data"
+    FOREX_API_KEY = os.getenv("FOREX_API_KEY")
     
     # Data persistence
     DATA_FILE = "user_data.json"
@@ -48,6 +53,13 @@ class Config:
     CONFIDENCE_THRESHOLD = 0.7
 
 # ============== ENUMS ==============
+class Platform(Enum):
+    SOLANA = "solana"
+    PUMP_FUN = "pump_fun"
+    BULLX = "bullx"
+    FOREX = "forex"
+
+# ... rest of existing enums ...
 class RiskLevel(Enum):
     CONSERVATIVE = "conservative"
     MODERATE = "moderate"
@@ -142,6 +154,12 @@ class AdvancedUser:
         "whale_alerts": True,
         "technical_alerts": True
     })
+  enabled_platforms: List[Platform] = field(default_factory=lambda: [
+        Platform.SOLANA, 
+        Platform.PUMP_FUN,
+        Platform.BULLX,
+        Platform.FOREX
+    ])
 
 @dataclass
 class EnhancedAlert:
@@ -171,6 +189,19 @@ class TradingSignal:
     risk_reward_ratio: float
     recommended_allocation: float
     generated_at: datetime = field(default_factory=datetime.now)
+  
+  @dataclass
+class PlatformAsset:
+    symbol: str
+    name: str
+    platform: Platform
+    current_price: float
+    change_24h: float
+    volume: float
+    liquidity: float = 0.0
+    address: Optional[str] = None  # For blockchain assets
+    pair: Optional[str] = None    # For forex pairs
+
 
 @dataclass
 class PortfolioAnalytics:
@@ -431,7 +462,249 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_html(status_text)
+  
+async def fetch_pump_fun_tokens(limit: int = 10) -> List[PlatformAsset]:
+    """Fetch trending tokens from Pump.fun"""
+    try:
+        async with httpx.AsyncClient() as client:
+            url = f"{Config.PUMP_FUN_API_URL}/tokens"
+            params = {"sort": "volume", "order": "desc", "limit": limit}
+            response = await client.get(url, params=params, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            tokens = []
+            for item in data.get('tokens', [])[:limit]:
+                token = PlatformAsset(
+                    symbol=item.get('symbol', ''),
+                    name=item.get('name', ''),
+                    platform=Platform.PUMP_FUN,
+                    current_price=float(item.get('price', 0)),
+                    change_24h=float(item.get('priceChange24h', 0)),
+                    volume=float(item.get('volume24h', 0)),
+                    liquidity=float(item.get('liquidity', 0)),
+                    address=item.get('address', '')
+                )
+                tokens.append(token)
+            return tokens
+    except Exception as e:
+        logger.error(f"Error fetching Pump.fun tokens: {e}")
+        return []
 
+async def fetch_bullx_assets(limit: int = 10) -> List[PlatformAsset]:
+    """Fetch trending assets from BullX.io"""
+    try:
+        async with httpx.AsyncClient() as client:
+            url = f"{Config.BULLX_API_URL}/market/trending"
+            headers = {"Content-Type": "application/json"}
+            response = await client.get(url, headers=headers, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            assets = []
+            for item in data.get('data', [])[:limit]:
+                asset = PlatformAsset(
+                    symbol=item.get('symbol', ''),
+                    name=item.get('name', ''),
+                    platform=Platform.BULLX,
+                    current_price=float(item.get('current_price', 0)),
+                    change_24h=float(item.get('price_change_24h', 0)),
+                    volume=float(item.get('volume_24h', 0))
+                )
+                assets.append(asset)
+            return assets
+    except Exception as e:
+        logger.error(f"Error fetching BullX assets: {e}")
+        return []
+
+async def fetch_forex_rates(base: str = "USD") -> Dict[str, float]:
+    """Fetch forex exchange rates from API"""
+    try:
+        async with httpx.AsyncClient() as client:
+            url = f"{Config.FOREX_API_URL}/latest"
+            params = {"base": base}
+            headers = {"apikey": Config.FOREX_API_KEY}
+            response = await client.get(url, params=params, headers=headers, timeout=10.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'rates' in data:
+                return data['rates']
+            return {}
+    except Exception as e:
+        logger.error(f"Error fetching forex rates: {e}")
+        return {}
+
+async def fetch_forex_pairs() -> List[PlatformAsset]:
+    """Fetch major forex pairs"""
+    try:
+        rates = await fetch_forex_rates()
+        major_pairs = ["EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD"]
+        
+        pairs = []
+        for symbol in major_pairs:
+            if symbol in rates:
+                pairs.append(PlatformAsset(
+                    symbol=f"{symbol}/USD",
+                    name=f"{symbol}/USD",
+                    platform=Platform.FOREX,
+                    current_price=rates[symbol],
+                    change_24h=0.0,  # Forex API doesn't provide 24h change in basic endpoint
+                    volume=0.0
+                ))
+        return pairs
+    except Exception as e:
+        logger.error(f"Error fetching forex pairs: {e}")
+        return []
+
+async def pumpfun_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Scan trending tokens on Pump.fun"""
+    try:
+        limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 5
+        limit = min(limit, 20)  # Max 20 tokens
+        
+        await update.message.reply_text(f"🔍 Scanning top {limit} tokens on Pump.fun...")
+        
+        tokens = await fetch_pump_fun_tokens(limit)
+        
+        if not tokens:
+            await update.message.reply_text("❌ No tokens found. Try again later.")
+            return
+        
+        reply = "🚀 <b>Top Pump.fun Tokens</b>\n\n"
+        for i, token in enumerate(tokens, 1):
+            change_emoji = "📈" if token.change_24h > 0 else "📉"
+            reply += (
+                f"{i}. <b>{token.symbol}</b> - {token.name}\n"
+                f"   💲 Price: ${token.current_price:.8f}\n"
+                f"   {change_emoji} 24h: {token.change_24h:.2f}%\n"
+                f"   💧 Volume: ${token.volume:,.2f}\n"
+                f"   💦 Liquidity: ${token.liquidity:,.2f}\n"
+                f"   📍 <code>{token.address}</code>\n\n"
+            )
+        
+        await update.message.reply_html(reply)
+    except Exception as e:
+        logger.error(f"Pump.fun scan error: {e}")
+        await update.message.reply_text("⚠️ Error scanning Pump.fun tokens. Try again later.")
+
+async def bullx_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Scan trending assets on BullX.io"""
+    try:
+        limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 5
+        limit = min(limit, 20)  # Max 20 assets
+        
+        await update.message.reply_text(f"🔍 Scanning top {limit} assets on BullX.io...")
+        
+        assets = await fetch_bullx_assets(limit)
+        
+        if not assets:
+            await update.message.reply_text("❌ No assets found. Try again later.")
+            return
+        
+        reply = "🐂 <b>Top BullX.io Assets</b>\n\n"
+        for i, asset in enumerate(assets, 1):
+            change_emoji = "📈" if asset.change_24h > 0 else "📉"
+            reply += (
+                f"{i}. <b>{asset.symbol}</b> - {asset.name}\n"
+                f"   💲 Price: ${asset.current_price:.4f}\n"
+                f"   {change_emoji} 24h: {asset.change_24h:.2f}%\n"
+                f"   💧 Volume: ${asset.volume:,.2f}\n\n"
+            )
+        
+        await update.message.reply_html(reply)
+    except Exception as e:
+        logger.error(f"BullX scan error: {e}")
+        await update.message.reply_text("⚠️ Error scanning BullX assets. Try again later.")
+
+async def forex_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show forex exchange rates"""
+    try:
+        base_currency = context.args[0].upper() if context.args else "USD"
+        
+        await update.message.reply_text(f"💱 Fetching forex rates for {base_currency}...")
+        
+        rates = await fetch_forex_rates(base_currency)
+        
+        if not rates:
+            await update.message.reply_text("❌ Could not fetch forex rates. Try again later.")
+            return
+        
+        major_currencies = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY", "NZD"]
+        filtered_rates = {curr: rate for curr, rate in rates.items() if curr in major_currencies}
+        
+        reply = f"💹 <b>Forex Exchange Rates ({base_currency} Base)</b>\n\n"
+        for currency, rate in filtered_rates.items():
+            reply += f"• {currency}: {rate:.4f}\n"
+        
+        reply += "\n💡 Use /forex_pair for detailed pair information"
+        await update.message.reply_html(reply)
+    except Exception as e:
+        logger.error(f"Forex rates error: {e}")
+        await update.message.reply_text("⚠️ Error fetching forex rates. Try again later.")
+
+async def forex_pairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show major forex pairs"""
+    try:
+        await update.message.reply_text("🔍 Fetching major forex pairs...")
+        
+        pairs = await fetch_forex_pairs()
+        
+        if not pairs:
+            await update.message.reply_text("❌ Could not fetch forex pairs. Try again later.")
+            return
+        
+        reply = "🌐 <b>Major Forex Pairs</b>\n\n"
+        for i, pair in enumerate(pairs, 1):
+            reply += f"{i}. <b>{pair.symbol}</b>: {pair.current_price:.4f}\n"
+        
+        await update.message.reply_html(reply)
+    except Exception as e:
+        logger.error(f"Forex pairs error: {e}")
+        await update.message.reply_text("⚠️ Error fetching forex pairs. Try again later.")
+
+async def multi_platform_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Scan assets across all platforms"""
+    try:
+        await update.message.reply_text("🔄 Scanning all platforms...")
+        
+        results = {
+            "Solana": await fetch_tokens(httpx.AsyncClient(), 
+                                       f"{Config.DEX_SCREENER_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=3"),
+            "Pump.fun": await fetch_pump_fun_tokens(3),
+            "BullX": await fetch_bullx_assets(3),
+            "Forex": await fetch_forex_pairs()
+        }
+        
+        reply = "🌐 <b>Multi-Platform Asset Scanner</b>\n\n"
+        
+        for platform, assets in results.items():
+            reply += f"<b>{platform.upper()}</b>\n"
+            
+            if not assets:
+                reply += "  • No assets found\n\n"
+                continue
+                
+            for i, asset in enumerate(assets[:3], 1):
+                if platform == "Solana":
+                    symbol = asset.get('baseToken', {}).get('symbol', 'Unknown')
+                    price = asset.get('priceUsd', 'N/A')
+                    change = asset.get('priceChange', {}).get('h24', 'N/A')
+                    reply += f"  {i}. {symbol}: ${price} ({change}%)\n"
+                elif platform == "Pump.fun":
+                    reply += f"  {i}. {asset.symbol}: ${asset.current_price:.8f} ({asset.change_24h:.2f}%)\n"
+                elif platform == "BullX":
+                    reply += f"  {i}. {asset.symbol}: ${asset.current_price:.4f} ({asset.change_24h:.2f}%)\n"
+                elif platform == "Forex":
+                    reply += f"  {i}. {asset.symbol}: {asset.current_price:.4f}\n"
+            
+            reply += "\n"
+        
+        await update.message.reply_html(reply)
+    except Exception as e:
+        logger.error(f"Multi-platform scan error: {e}")
+        await update.message.reply_text("⚠️ Error scanning platforms. Try again later.")
+      
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with httpx.AsyncClient() as client:
@@ -1495,6 +1768,11 @@ def main():
         CommandHandler('sentiment', market_sentiment),
         CommandHandler('simulate', trade_simulator),
         CommandHandler('whales', whale_tracker),
+        CommandHandler('pumpfun', pumpfun_scan),
+        CommandHandler('bullx', bullx_scan),
+        CommandHandler('forex_rates', forex_rates),
+        CommandHandler('forex_pairs', forex_pairs),
+        CommandHandler('multiscan', multi_platform_scan),
     ]
     
     for handler in advanced_handlers:
@@ -1511,7 +1789,11 @@ def main():
             ("watch", "Add to watchlist"), ("watchlist", "View watchlist"),
             ("ai_analysis", "AI token analysis"), ("portfolio_optimizer", "Portfolio optimization"),
             ("copy_trading", "Copy trading"), ("market_maker", "Market making opportunities"),
-            ("defi_opportunities", "DeFi yield opportunities")
+            ("defi_opportunities", "DeFi yield opportunities"),("pumpfun", "Scan Pump.fun tokens"),
+            ("bullx", "Scan BullX.io assets"),
+            ("forex_rates", "Forex exchange rates"),
+            ("forex_pairs", "Major forex pairs"),
+            ("multiscan", "Scan all platforms")
         ]
         
         await application.bot.set_my_commands([BotCommand(c, d) for c, d in all_commands])
