@@ -3,7 +3,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict, field
 from enum import Enum
-import aioredis
 import numpy as np
 from solders.pubkey import Pubkey
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
@@ -28,7 +27,6 @@ class Config:
     DEX_SCREENER_URL = "https://api.dexscreener.com/latest/dex"
     BIRDEYE_API_URL = "https://public-api.birdeye.so"
     BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY")
-    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
     
     # Data persistence
     DATA_FILE = "user_data.json"
@@ -220,16 +218,11 @@ def load_watchlist():
 def save_watchlist(watchlist):
     save_json_data(Config.WATCHLIST_FILE, watchlist)
 
-# ============== ANALYTICS ENGINE ==============
+# ============== ANALYTICS ENGINE (Redis-free) ==============
 class AnalyticsEngine:
     def __init__(self):
-        self.redis_client = None
-    
-    async def initialize_redis(self):
-        try:
-            self.redis_client = await aioredis.from_url(Config.REDIS_URL)
-        except Exception as e:
-            logging.warning(f"Redis connection failed: {e}")
+        # Simple in-memory cache instead of Redis
+        self.cache = {}
     
     async def calculate_technical_indicators(self, price_data: List[float]) -> TechnicalIndicators:
         if len(price_data) < 14:
