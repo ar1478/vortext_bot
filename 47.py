@@ -60,7 +60,6 @@ class Platform(Enum):
     BULLX = "bullx"
     FOREX = "forex"
 
-# ... rest of existing enums ...
 class RiskLevel(Enum):
     CONSERVATIVE = "conservative"
     MODERATE = "moderate"
@@ -90,7 +89,7 @@ class AlertType(Enum):
 
 # ============== DATA STRUCTURES ==============
 @dataclass
-class PlatformAsset:  # Move this ABOVE the User class
+class PlatformAsset:
     symbol: str
     name: str
     platform: Platform
@@ -100,7 +99,7 @@ class PlatformAsset:  # Move this ABOVE the User class
     liquidity: float = 0.0
     address: Optional[str] = None
     pair: Optional[str] = None
-  
+
 @dataclass
 class User:
     wallet: str
@@ -139,8 +138,6 @@ class MarketSentiment:
     funding_rate: float = 0.0
     open_interest_change: float = 0.0
 
-
-
 @dataclass
 class AdvancedUser:
     wallet: str
@@ -168,13 +165,14 @@ class AdvancedUser:
         "ai_signals": True,
         "whale_alerts": True,
         "technical_alerts": True
-    }),
+    })
     enabled_platforms: List[Platform] = field(default_factory=lambda: [
         Platform.SOLANA, 
         Platform.PUMP_FUN,
         Platform.BULLX,
         Platform.FOREX
     ])
+
 @dataclass
 class EnhancedAlert:
     id: str
@@ -201,9 +199,9 @@ class TradingSignal:
     market_sentiment: MarketSentiment
     price_prediction: Dict[str, float]  # 1h, 4h, 24h predictions
     risk_reward_ratio: float
-    recommended_allocation: float,
+    recommended_allocation: float
     generated_at: datetime = field(default_factory=datetime.now)
-  
+
 @dataclass
 class PortfolioAnalytics:
     total_value_usd: float
@@ -281,19 +279,10 @@ def validate_wallet_address(address: str, platform: Platform) -> bool:
         Platform.FOREX: lambda x: True  # Forex doesn't use wallet addresses
     }
     return validation_rules.get(platform, lambda x: False)(address)
-# ============== BASIC COMMAND HANDLERS ==============
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_html(
-        rf"👋 Welcome {user.mention_html()} to UltimateSolanaTraderBot!",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 Commands Guide", callback_data="help")],
-            [InlineKeyboardButton("🔗 Link Wallet", callback_data="register")]
-        ])
-    )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
+# ============== HELPER FUNCTIONS ==============
+def get_help_text() -> str:
+    return """
 🤖 <b>UltimateSolanaTraderBot Commands</b>
 
 <b>Basic Commands</b>
@@ -328,17 +317,34 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /defi_opportunities - DeFi yield opportunities
 /whales - Whale transaction tracker
 """
-    await update.message.reply_html(help_text)
+
+# ============== BASIC COMMAND HANDLERS ==============
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_html(
+        rf"👋 Welcome {user.mention_html()} to UltimateSolanaTraderBot!",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📚 Commands Guide", callback_data="help")],
+            [InlineKeyboardButton("🔗 Link Wallet", callback_data="register")]
+        ])
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = get_help_text()
+    if update.callback_query:
+        query = update.callback_query
+        await query.message.reply_text(help_text, parse_mode="HTML")
+    else:
+        await update.message.reply_html(help_text)
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    user_data = load_user_data()
-    
-    if user_id in user_data:
-        await update.message.reply_text("✅ You're already registered!")
-        return
-    
-    await update.message.reply_text("🔗 Please send your Solana wallet address:")
+    user = update.effective_user
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.message.reply_text("🔗 Please send your Solana wallet address:")
+    else:
+        await update.message.reply_text("🔗 Please send your Solana wallet address:")
     return REGISTER
 
 async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1693,6 +1699,18 @@ async def whale_tracker(update, ctx):
     reply += "💡 Tip: Follow whale movements for market insights!"
     await update.message.reply_text(reply)
 
+# ============== BUTTON HANDLER ==============
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "help":
+        await help_command(update, context)
+    elif query.data == "register":
+        await register(update, context)
+    else:
+        await query.message.reply_text("Unknown command selection")
+
 # ============== JOB FUNCTIONS ==============
 async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
     logger.info("🔔 Checking price alerts...")
@@ -1744,7 +1762,7 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
 
 # ============== MAIN FUNCTION ==============
 def main():
-   required_config = [
+    required_config = [
         "TELEGRAM_TOKEN", 
         "FOREX_API_KEY",
         "BIRDEYE_API_KEY"
@@ -1770,6 +1788,9 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     app.add_handler(conv_handler)
+    
+    # Add callback handler for inline buttons
+    app.add_handler(CallbackQueryHandler(button_handler))
     
     # Basic command handlers
     basic_handlers = [
