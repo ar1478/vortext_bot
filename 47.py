@@ -1,10 +1,9 @@
-import os, json, logging, httpx, re, asyncio, hashlib, hmac
+import os, json, logging, httpx, re, asyncio, hashlib, hmac, time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 import numpy as np
-import time
 from solders.pubkey import Pubkey
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
@@ -270,19 +269,20 @@ def load_watchlist():
 
 def save_watchlist(watchlist):
     save_json_data(Config.WATCHLIST_FILE, watchlist)
-  
-def validate_wallet_address(address: str, platform: Platform) -> bool:
-    validation_rules = {
-        Platform.SOLANA: lambda x: len(x) == 44,
-        Platform.PUMP_FUN: lambda x: len(x) == 44 or len(x) == 42,
-        Platform.BULLX: lambda x: len(x) > 20,  # Adjust based on actual requirements
-        Platform.FOREX: lambda x: True  # Forex doesn't use wallet addresses
-    }
-    return validation_rules.get(platform, lambda x: False)(address)
 
-# ============== HELPER FUNCTIONS ==============
-def get_help_text() -> str:
-    return """
+# ============== BASIC COMMAND HANDLERS ==============
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_html(
+        rf"👋 Welcome {user.mention_html()} to UltimateSolanaTraderBot!",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📚 Commands Guide", callback_data="help")],
+            [InlineKeyboardButton("🔗 Link Wallet", callback_data="register")]
+        ])
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = """
 🤖 <b>UltimateSolanaTraderBot Commands</b>
 
 <b>Basic Commands</b>
@@ -317,34 +317,17 @@ def get_help_text() -> str:
 /defi_opportunities - DeFi yield opportunities
 /whales - Whale transaction tracker
 """
-
-# ============== BASIC COMMAND HANDLERS ==============
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_html(
-        rf"👋 Welcome {user.mention_html()} to UltimateSolanaTraderBot!",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 Commands Guide", callback_data="help")],
-            [InlineKeyboardButton("🔗 Link Wallet", callback_data="register")]
-        ])
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = get_help_text()
-    if update.callback_query:
-        query = update.callback_query
-        await query.message.reply_text(help_text, parse_mode="HTML")
-    else:
-        await update.message.reply_html(help_text)
+    await update.message.reply_html(help_text)
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        await query.message.reply_text("🔗 Please send your Solana wallet address:")
-    else:
-        await update.message.reply_text("🔗 Please send your Solana wallet address:")
+    user_id = str(update.effective_user.id)
+    user_data = load_user_data()
+    
+    if user_id in user_data:
+        await update.message.reply_text("✅ You're already registered!")
+        return
+    
+    await update.message.reply_text("🔗 Please send your Solana wallet address:")
     return REGISTER
 
 async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -482,14 +465,32 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_html(status_text)
-  
+
+# ============== PLATFORM API FUNCTIONS ==============
+def rate_limited(max_per_minute):
+    min_interval = 60.0 / max_per_minute
+    
+    def decorator(func):
+        last_called = [0.0]
+        
+        async def wrapped(*args, **kwargs):
+            elapsed = time.time() - last_called[0]
+            wait = max(0, min_interval - elapsed)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            last_called[0] = time.time()
+            return await func(*args, **kwargs)
+        return wrapped
+    return decorator
+
+@rate_limited(30)
 async def fetch_pump_fun_tokens(limit: int = 10) -> List[PlatformAsset]:
     """Fetch trending tokens from Pump.fun"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             url = f"{Config.PUMP_FUN_API_URL}/tokens"
             params = {"sort": "volume", "order": "desc", "limit": limit}
-            response = await client.get(url, params=params, timeout=10.0)
+            response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             
@@ -517,13 +518,14 @@ async def fetch_pump_fun_tokens(limit: int = 10) -> List[PlatformAsset]:
         logger.error(f"Error fetching Pump.fun tokens: {e}")
         return []
 
+@rate_limited(30)
 async def fetch_bullx_assets(limit: int = 10) -> List[PlatformAsset]:
     """Fetch trending assets from BullX.io"""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             url = f"{Config.BULLX_API_URL}/market/trending"
             headers = {"Content-Type": "application/json"}
-            response = await client.get(url, headers=headers, timeout=10.0)
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
             data = response.json()
             
@@ -539,30 +541,51 @@ async def fetch_bullx_assets(limit: int = 10) -> List[PlatformAsset]:
                 )
                 assets.append(asset)
             return assets
+    except httpx.ReadTimeout:
+        logger.warning("BullX API timeout")
+        return []
+    except httpx.HTTPStatusError as e:
+        logger.error(f"BullX API error: {e.response.status_code}")
+        return []
     except Exception as e:
         logger.error(f"Error fetching BullX assets: {e}")
         return []
 
+@rate_limited(30)
 async def fetch_forex_rates(base: str = "USD") -> Dict[str, float]:
     """Fetch forex exchange rates from API"""
+    if not Config.FOREX_API_KEY:
+        logger.warning("Skipping forex rates - API key not configured")
+        return {}
+        
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             url = f"{Config.FOREX_API_URL}/latest"
             params = {"base": base}
             headers = {"apikey": Config.FOREX_API_KEY}
-            response = await client.get(url, params=params, headers=headers, timeout=10.0)
+            response = await client.get(url, params=params, headers=headers)
             response.raise_for_status()
             data = response.json()
             
             if 'rates' in data:
                 return data['rates']
             return {}
+    except httpx.ReadTimeout:
+        logger.warning("Forex API timeout")
+        return {}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Forex API error: {e.response.status_code}")
+        return {}
     except Exception as e:
         logger.error(f"Error fetching forex rates: {e}")
         return {}
 
 async def fetch_forex_pairs() -> List[PlatformAsset]:
     """Fetch major forex pairs"""
+    if not Config.FOREX_API_KEY:
+        logger.warning("Skipping forex pairs - API key not configured")
+        return []
+        
     try:
         rates = await fetch_forex_rates()
         major_pairs = ["EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD"]
@@ -583,6 +606,7 @@ async def fetch_forex_pairs() -> List[PlatformAsset]:
         logger.error(f"Error fetching forex pairs: {e}")
         return []
 
+# ============== PLATFORM COMMAND HANDLERS ==============
 async def pumpfun_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Scan trending tokens on Pump.fun"""
     try:
@@ -645,6 +669,10 @@ async def bullx_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def forex_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show forex exchange rates"""
+    if not Config.FOREX_API_KEY:
+        await update.message.reply_text("❌ Forex functionality is disabled. API key not configured.")
+        return
+    
     try:
         base_currency = context.args[0].upper() if context.args else "USD"
         
@@ -671,6 +699,10 @@ async def forex_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def forex_pairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show major forex pairs"""
+    if not Config.FOREX_API_KEY:
+        await update.message.reply_text("❌ Forex functionality is disabled. API key not configured.")
+        return
+    
     try:
         await update.message.reply_text("🔍 Fetching major forex pairs...")
         
@@ -699,8 +731,13 @@ async def multi_platform_scan(update: Update, context: ContextTypes.DEFAULT_TYPE
                                        f"{Config.DEX_SCREENER_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=3"),
             "Pump.fun": await fetch_pump_fun_tokens(3),
             "BullX": await fetch_bullx_assets(3),
-            "Forex": await fetch_forex_pairs()
         }
+        
+        # Only add Forex if API key is available
+        if Config.FOREX_API_KEY:
+            results["Forex"] = await fetch_forex_pairs()
+        else:
+            results["Forex"] = []
         
         reply = "🌐 <b>Multi-Platform Asset Scanner</b>\n\n"
         
@@ -1197,7 +1234,7 @@ async def fetch_tokens(client, url):
         logger.error(f"Unexpected error: {e}")
         return []
 
-# ============== COMMAND HANDLERS ==============
+# ============== ADVANCED COMMAND HANDLERS ==============
 async def ai_analysis(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if len(ctx.args) != 1:
         await update.message.reply_text(
@@ -1699,18 +1736,6 @@ async def whale_tracker(update, ctx):
     reply += "💡 Tip: Follow whale movements for market insights!"
     await update.message.reply_text(reply)
 
-# ============== BUTTON HANDLER ==============
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "help":
-        await help_command(update, context)
-    elif query.data == "register":
-        await register(update, context)
-    else:
-        await query.message.reply_text("Unknown command selection")
-
 # ============== JOB FUNCTIONS ==============
 async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
     logger.info("🔔 Checking price alerts...")
@@ -1762,20 +1787,16 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
 
 # ============== MAIN FUNCTION ==============
 def main():
-    required_config = [
-        "TELEGRAM_TOKEN", 
-        "FOREX_API_KEY",
-        "BIRDEYE_API_KEY"
-    ]
-    
-    for key in required_config:
-        if not getattr(Config, key):
-            logger.error(f"Missing required configuration: {key}")
-            return
-          
+    # Validate essential configuration
     if not Config.TELEGRAM_TOKEN:
         logger.error("TELEGRAM_TOKEN environment variable not set!")
         return
+    
+    # Warn about missing API keys but don't block startup
+    if not Config.FOREX_API_KEY:
+        logger.warning("FOREX_API_KEY not set. Forex commands will be disabled")
+    if not Config.BIRDEYE_API_KEY:
+        logger.warning("BIRDEYE_API_KEY not set. Some features may be limited")
     
     app = ApplicationBuilder().token(Config.TELEGRAM_TOKEN).build()
     
@@ -1788,9 +1809,6 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     app.add_handler(conv_handler)
-    
-    # Add callback handler for inline buttons
-    app.add_handler(CallbackQueryHandler(button_handler))
     
     # Basic command handlers
     basic_handlers = [
@@ -1833,15 +1851,26 @@ def main():
     # Post initialization
     async def post_init(application):
         all_commands = [
-            ("start", "Start bot"), ("help", "List commands"), ("register", "Link wallet"),
-            ("balance", "SOL balance"), ("portfolio", "Show tokens"), ("status", "Wallet summary"),
-            ("scan", "Basic scan"), ("advanced_scan", "Advanced scanner"),
-            ("sentiment", "Market sentiment"), ("whales", "Whale tracker"),
-            ("alert", "Price alerts"), ("simulate", "Trade simulator"),
-            ("watch", "Add to watchlist"), ("watchlist", "View watchlist"),
-            ("ai_analysis", "AI token analysis"), ("portfolio_optimizer", "Portfolio optimization"),
-            ("copy_trading", "Copy trading"), ("market_maker", "Market making opportunities"),
-            ("defi_opportunities", "DeFi yield opportunities"),("pumpfun", "Scan Pump.fun tokens"),
+            ("start", "Start bot"), 
+            ("help", "List commands"), 
+            ("register", "Link wallet"),
+            ("balance", "SOL balance"), 
+            ("portfolio", "Show tokens"), 
+            ("status", "Wallet summary"),
+            ("scan", "Basic scan"), 
+            ("advanced_scan", "Advanced scanner"),
+            ("sentiment", "Market sentiment"), 
+            ("whales", "Whale tracker"),
+            ("alert", "Price alerts"), 
+            ("simulate", "Trade simulator"),
+            ("watch", "Add to watchlist"), 
+            ("watchlist", "View watchlist"),
+            ("ai_analysis", "AI token analysis"), 
+            ("portfolio_optimizer", "Portfolio optimization"),
+            ("copy_trading", "Copy trading"), 
+            ("market_maker", "Market making opportunities"),
+            ("defi_opportunities", "DeFi yield opportunities"),
+            ("pumpfun", "Scan Pump.fun tokens"),
             ("bullx", "Scan BullX.io assets"),
             ("forex_rates", "Forex exchange rates"),
             ("forex_pairs", "Major forex pairs"),
@@ -1857,7 +1886,7 @@ def main():
     
     app.post_init = post_init
     
-    logger.info("🚀 UltimateSolanaTraderBot starting...")
+    logger.info("🚀 Ultimate Multi-Platform Trader Bot starting...")
     app.run_polling()
 
 if __name__ == '__main__':
