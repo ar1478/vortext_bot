@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 import numpy as np
+import time
 from solders.pubkey import Pubkey
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
@@ -89,6 +90,18 @@ class AlertType(Enum):
 
 # ============== DATA STRUCTURES ==============
 @dataclass
+class PlatformAsset:  # Move this ABOVE the User class
+    symbol: str
+    name: str
+    platform: Platform
+    current_price: float
+    change_24h: float
+    volume: float
+    liquidity: float = 0.0
+    address: Optional[str] = None
+    pair: Optional[str] = None
+  
+@dataclass
 class User:
     wallet: str
     slippage: float = 1.0
@@ -126,6 +139,8 @@ class MarketSentiment:
     funding_rate: float = 0.0
     open_interest_change: float = 0.0
 
+
+
 @dataclass
 class AdvancedUser:
     wallet: str
@@ -153,14 +168,13 @@ class AdvancedUser:
         "ai_signals": True,
         "whale_alerts": True,
         "technical_alerts": True
-    })
-  enabled_platforms: List[Platform] = field(default_factory=lambda: [
+    }),
+    enabled_platforms: List[Platform] = field(default_factory=lambda: [
         Platform.SOLANA, 
         Platform.PUMP_FUN,
         Platform.BULLX,
         Platform.FOREX
     ])
-
 @dataclass
 class EnhancedAlert:
     id: str
@@ -187,22 +201,9 @@ class TradingSignal:
     market_sentiment: MarketSentiment
     price_prediction: Dict[str, float]  # 1h, 4h, 24h predictions
     risk_reward_ratio: float
-    recommended_allocation: float
+    recommended_allocation: float,
     generated_at: datetime = field(default_factory=datetime.now)
   
-  @dataclass
-class PlatformAsset:
-    symbol: str
-    name: str
-    platform: Platform
-    current_price: float
-    change_24h: float
-    volume: float
-    liquidity: float = 0.0
-    address: Optional[str] = None  # For blockchain assets
-    pair: Optional[str] = None    # For forex pairs
-
-
 @dataclass
 class PortfolioAnalytics:
     total_value_usd: float
@@ -271,7 +272,15 @@ def load_watchlist():
 
 def save_watchlist(watchlist):
     save_json_data(Config.WATCHLIST_FILE, watchlist)
-
+  
+def validate_wallet_address(address: str, platform: Platform) -> bool:
+    validation_rules = {
+        Platform.SOLANA: lambda x: len(x) == 44,
+        Platform.PUMP_FUN: lambda x: len(x) == 44 or len(x) == 42,
+        Platform.BULLX: lambda x: len(x) > 20,  # Adjust based on actual requirements
+        Platform.FOREX: lambda x: True  # Forex doesn't use wallet addresses
+    }
+    return validation_rules.get(platform, lambda x: False)(address)
 # ============== BASIC COMMAND HANDLERS ==============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -471,7 +480,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def fetch_pump_fun_tokens(limit: int = 10) -> List[PlatformAsset]:
     """Fetch trending tokens from Pump.fun"""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             url = f"{Config.PUMP_FUN_API_URL}/tokens"
             params = {"sort": "volume", "order": "desc", "limit": limit}
             response = await client.get(url, params=params, timeout=10.0)
@@ -492,6 +501,12 @@ async def fetch_pump_fun_tokens(limit: int = 10) -> List[PlatformAsset]:
                 )
                 tokens.append(token)
             return tokens
+    except httpx.ReadTimeout:
+        logger.warning("Pump.fun API timeout")
+        return []
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Pump.fun API error: {e.response.status_code}")
+        return []
     except Exception as e:
         logger.error(f"Error fetching Pump.fun tokens: {e}")
         return []
@@ -642,7 +657,7 @@ async def forex_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for currency, rate in filtered_rates.items():
             reply += f"• {currency}: {rate:.4f}\n"
         
-        reply += "\n💡 Use /forex_pair for detailed pair information"
+        reply += "\n💡 Use /forex_pairs for detailed pair information"
         await update.message.reply_html(reply)
     except Exception as e:
         logger.error(f"Forex rates error: {e}")
@@ -1729,6 +1744,17 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
 
 # ============== MAIN FUNCTION ==============
 def main():
+   required_config = [
+        "TELEGRAM_TOKEN", 
+        "FOREX_API_KEY",
+        "BIRDEYE_API_KEY"
+    ]
+    
+    for key in required_config:
+        if not getattr(Config, key):
+            logger.error(f"Missing required configuration: {key}")
+            return
+          
     if not Config.TELEGRAM_TOKEN:
         logger.error("TELEGRAM_TOKEN environment variable not set!")
         return
