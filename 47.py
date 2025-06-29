@@ -24,13 +24,13 @@ class Config:
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
     SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
     JUPITER_API_URL = "https://quote-api.jup.ag/v6"
-    DEX_SCREENER_URL = "https://api.dexscreener.com/latest/dex"
+    DEX_SCREENER_URL = "https://api.dexscreener.com/latest/dex/search"
     BIRDEYE_API_URL = "https://public-api.birdeye.so"
     BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY") 
     # New platform integrations
     PUMP_FUN_API_URL = "https://api.pump.fun"
     BULLX_API_URL = "https://api.bullx.io/v1"
-    FOREX_API_URL = "https://api.apilayer.com/exchangerates_data"
+    FOREX_API_URL = "https://api.apilayer.com/exchangerates_data/"
     FOREX_API_KEY = os.getenv("FOREX_API_KEY")
     
     # Data persistence
