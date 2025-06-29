@@ -485,37 +485,40 @@ def rate_limited(max_per_minute):
 
 @rate_limited(30)
 async def fetch_pump_fun_tokens(limit: int = 10) -> List[PlatformAsset]:
-    """Fetch trending tokens from Pump.fun"""
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            url = f"{Config.PUMP_FUN_API_URL}/tokens"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            url = f"{Config.PUMP_FUN_API_URL}/v1/tokens"
+            headers = {"Authorization": f"Bearer {Config.PUMP_FUN_API_KEY}"} 
             params = {"sort": "volume", "order": "desc", "limit": limit}
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
+            response = await client.get(url, headers=headers, params=params)
             
+            # Handle API errors
+            if response.status_code == 429:
+                logger.warning("Pump.fun rate limit exceeded")
+                return []
+            response.raise_for_status()
+            
+            data = response.json()
             tokens = []
-            for item in data.get('tokens', [])[:limit]:
+            for item in data.get('data', [])[:limit]:  # Updated key
                 token = PlatformAsset(
-                    symbol=item.get('symbol', ''),
-                    name=item.get('name', ''),
+                    symbol=item.get('symbol'),
+                    name=item.get('name'),
                     platform=Platform.PUMP_FUN,
                     current_price=float(item.get('price', 0)),
                     change_24h=float(item.get('priceChange24h', 0)),
                     volume=float(item.get('volume24h', 0)),
                     liquidity=float(item.get('liquidity', 0)),
-                    address=item.get('address', '')
+                    address=item.get('address')  # Verify field name
                 )
                 tokens.append(token)
             return tokens
+            
     except httpx.ReadTimeout:
-        logger.warning("Pump.fun API timeout")
+        logger.error("Pump.fun timeout - consider increasing timeout to 15s")
         return []
     except httpx.HTTPStatusError as e:
-        logger.error(f"Pump.fun API error: {e.response.status_code}")
-        return []
-    except Exception as e:
-        logger.error(f"Error fetching Pump.fun tokens: {e}")
+        logger.error(f"API error {e.response.status_code}: {e.response.text}")
         return []
 
 @rate_limited(30)
