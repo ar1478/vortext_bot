@@ -607,147 +607,177 @@ async def fetch_forex_pairs() -> List[PlatformAsset]:
         return []
 
 # ============== PLATFORM COMMAND HANDLERS ==============
+# ... (keep the existing fetch_pump_fun_tokens, fetch_bullx_assets, fetch_forex_rates, fetch_forex_pairs functions as they are) ...
+
+# ============== UPDATED COMMAND HANDLERS WITH REALISTIC MESSAGES ==============
 async def pumpfun_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Scan trending tokens on Pump.fun"""
+    """Scan trending tokens on Pump.fun with enhanced messaging"""
     try:
-        limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 5
-        limit = min(limit, 20)  # Max 20 tokens
+        # Safely parse limit parameter
+        limit = 5
+        if context.args:
+            try:
+                limit = min(int(context.args[0]), 20)  # Cap at 20 tokens
+            except (ValueError, IndexError):
+                pass
         
-        await update.message.reply_text(f"🔍 Scanning top {limit} tokens on Pump.fun...")
+        scanning_msg = await update.message.reply_text("🔍 Scanning top tokens on Pump.fun...")
         
         tokens = await fetch_pump_fun_tokens(limit)
         
         if not tokens:
-            await update.message.reply_text("❌ No tokens found. Try again later.")
+            await scanning_msg.edit_text("⚠️ Pump.fun is quiet right now. No trending tokens found. Try again later.")
             return
         
-        reply = "🚀 <b>Top Pump.fun Tokens</b>\n\n"
+        # Build response message
+        reply = "🚀 <b>Hot Tokens on Pump.fun</b>\n\n"
         for i, token in enumerate(tokens, 1):
-            change_emoji = "📈" if token.change_24h > 0 else "📉"
+            change_emoji = "🚀" if token.change_24h > 15 else "📈" if token.change_24h > 0 else "📉"
+            
             reply += (
                 f"{i}. <b>{token.symbol}</b> - {token.name}\n"
-                f"   💲 Price: ${token.current_price:.8f}\n"
-                f"   {change_emoji} 24h: {token.change_24h:.2f}%\n"
-                f"   💧 Volume: ${token.volume:,.2f}\n"
-                f"   💦 Liquidity: ${token.liquidity:,.2f}\n"
-                f"   📍 <code>{token.address}</code>\n\n"
+                f"   💵 Price: ${token.current_price:.8f}\n"
+                f"   {change_emoji} 24h: <b>{token.change_24h:+.2f}%</b>\n"
+                f"   💦 Volume: ${token.volume:,.2f}\n"
+                f"   🌊 Liquidity: ${token.liquidity:,.2f}\n"
+                f"   🔗 <code>{shorten_address(token.address)}</code>\n\n"
             )
         
-        await update.message.reply_html(reply)
+        await scanning_msg.edit_text(reply, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Pump.fun scan error: {e}")
-        await update.message.reply_text("⚠️ Error scanning Pump.fun tokens. Try again later.")
+        await update.message.reply_text("⚠️ Pump.fun is busy right now. Please try again in a minute.")
 
 async def bullx_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Scan trending assets on BullX.io"""
+    """Scan trending assets on BullX.io with enhanced messaging"""
     try:
-        limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 5
-        limit = min(limit, 20)  # Max 20 assets
+        # Safely parse limit parameter
+        limit = 5
+        if context.args:
+            try:
+                limit = min(int(context.args[0]), 20)  # Cap at 20 assets
+            except (ValueError, IndexError):
+                pass
         
-        await update.message.reply_text(f"🔍 Scanning top {limit} assets on BullX.io...")
+        scanning_msg = await update.message.reply_text("🔍 Scanning hot assets on BullX.io...")
         
         assets = await fetch_bullx_assets(limit)
         
         if not assets:
-            await update.message.reply_text("❌ No assets found. Try again later.")
+            await scanning_msg.edit_text("⚠️ BullX.io is quiet right now. No trending assets found. Try again later.")
             return
         
-        reply = "🐂 <b>Top BullX.io Assets</b>\n\n"
+        # Build response message
+        reply = "🐂 <b>Hot Assets on BullX.io</b>\n\n"
         for i, asset in enumerate(assets, 1):
-            change_emoji = "📈" if asset.change_24h > 0 else "📉"
+            change_emoji = "🔥" if asset.change_24h > 20 else "📈" if asset.change_24h > 0 else "📉"
+            
             reply += (
                 f"{i}. <b>{asset.symbol}</b> - {asset.name}\n"
-                f"   💲 Price: ${asset.current_price:.4f}\n"
-                f"   {change_emoji} 24h: {asset.change_24h:.2f}%\n"
-                f"   💧 Volume: ${asset.volume:,.2f}\n\n"
+                f"   💵 Price: ${asset.current_price:.4f}\n"
+                f"   {change_emoji} 24h: <b>{asset.change_24h:+.2f}%</b>\n"
+                f"   💦 Volume: ${asset.volume:,.2f}\n\n"
             )
         
-        await update.message.reply_html(reply)
+        await scanning_msg.edit_text(reply, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"BullX scan error: {e}")
-        await update.message.reply_text("⚠️ Error scanning BullX assets. Try again later.")
+        await update.message.reply_text("⚠️ BullX.io is busy right now. Please try again in a minute.")
 
 async def forex_rates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show forex exchange rates"""
+    """Show forex exchange rates with enhanced messaging"""
     if not Config.FOREX_API_KEY:
-        await update.message.reply_text("❌ Forex functionality is disabled. API key not configured.")
+        await update.message.reply_text("⚠️ Currency exchange service is currently unavailable.")
         return
     
     try:
-        base_currency = context.args[0].upper() if context.args else "USD"
+        base_currency = "USD"
+        if context.args:
+            base_currency = context.args[0].upper()[:3]  # Sanitize input
         
-        await update.message.reply_text(f"💱 Fetching forex rates for {base_currency}...")
+        scanning_msg = await update.message.reply_text(f"💱 Fetching live exchange rates for {base_currency}...")
         
         rates = await fetch_forex_rates(base_currency)
         
         if not rates:
-            await update.message.reply_text("❌ Could not fetch forex rates. Try again later.")
+            await scanning_msg.edit_text("⚠️ Exchange rates unavailable. Financial markets might be closed. Try again later.")
             return
         
         major_currencies = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY", "NZD"]
-        filtered_rates = {curr: rate for curr, rate in rates.items() if curr in major_currencies}
+        filtered_rates = {curr: rates[curr] for curr in major_currencies if curr in rates}
         
-        reply = f"💹 <b>Forex Exchange Rates ({base_currency} Base)</b>\n\n"
+        if not filtered_rates:
+            await scanning_msg.edit_text(f"⚠️ No major currency rates found for {base_currency}. Try another base currency.")
+            return
+        
+        reply = f"💹 <b>Live Forex Rates (1 {base_currency})</b>\n\n"
         for currency, rate in filtered_rates.items():
-            reply += f"• {currency}: {rate:.4f}\n"
+            flag = FLAG_EMOJIS.get(currency, "🌐")
+            reply += f"{flag} <b>{currency}</b>: {rate:.4f}\n"
         
-        reply += "\n💡 Use /forex_pairs for detailed pair information"
-        await update.message.reply_html(reply)
+        await scanning_msg.edit_text(reply, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Forex rates error: {e}")
-        await update.message.reply_text("⚠️ Error fetching forex rates. Try again later.")
+        await update.message.reply_text("⚠️ Currency service is busy. Please try again in a minute.")
 
 async def forex_pairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show major forex pairs"""
+    """Show major forex pairs with enhanced messaging"""
     if not Config.FOREX_API_KEY:
-        await update.message.reply_text("❌ Forex functionality is disabled. API key not configured.")
+        await update.message.reply_text("⚠️ Currency exchange service is currently unavailable.")
         return
     
     try:
-        await update.message.reply_text("🔍 Fetching major forex pairs...")
+        scanning_msg = await update.message.reply_text("🔍 Fetching major currency pairs...")
         
         pairs = await fetch_forex_pairs()
         
         if not pairs:
-            await update.message.reply_text("❌ Could not fetch forex pairs. Try again later.")
+            await scanning_msg.edit_text("⚠️ Currency pairs unavailable. Financial markets might be closed. Try again later.")
             return
         
-        reply = "🌐 <b>Major Forex Pairs</b>\n\n"
+        reply = "🌐 <b>Major Currency Pairs</b>\n\n"
         for i, pair in enumerate(pairs, 1):
-            reply += f"{i}. <b>{pair.symbol}</b>: {pair.current_price:.4f}\n"
+            base_curr = pair.symbol.split("/")[0]
+            flag = FLAG_EMOJIS.get(base_curr, "💱")
+            reply += f"{i}. {flag} <b>{pair.symbol}</b>: {pair.current_price:.4f}\n"
         
-        await update.message.reply_html(reply)
+        await scanning_msg.edit_text(reply, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Forex pairs error: {e}")
-        await update.message.reply_text("⚠️ Error fetching forex pairs. Try again later.")
+        await update.message.reply_text("⚠️ Currency service is busy. Please try again in a minute.")
 
 async def multi_platform_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Scan assets across all platforms"""
+    """Scan assets across all platforms with enhanced messaging"""
     try:
-        await update.message.reply_text("🔄 Scanning all platforms...")
+        scanning_msg = await update.message.reply_text("🌐 Scanning multiple platforms...")
+        
+        # Fetch all platform data concurrently
+        solana_task = fetch_tokens(httpx.AsyncClient(), 
+                                 f"{Config.DEX_SCREENER_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=3")
+        pump_task = fetch_pump_fun_tokens(3)
+        bullx_task = fetch_bullx_assets(3)
+        forex_task = fetch_forex_pairs() if Config.FOREX_API_KEY else []
+        
+        solana, pump, bullx, forex = await asyncio.gather(
+            solana_task, pump_task, bullx_task, 
+            forex_task if Config.FOREX_API_KEY else asyncio.sleep(0, result=[])
+        )
         
         results = {
-            "Solana": await fetch_tokens(httpx.AsyncClient(), 
-                                       f"{Config.DEX_SCREENER_URL}/search/pairs?q=solana&sort=volume.h24&order=desc&limit=3"),
-            "Pump.fun": await fetch_pump_fun_tokens(3),
-            "BullX": await fetch_bullx_assets(3),
+            "Solana": solana,
+            "Pump.fun": pump,
+            "BullX": bullx,
+            "Forex": forex
         }
         
-        # Only add Forex if API key is available
-        if Config.FOREX_API_KEY:
-            results["Forex"] = await fetch_forex_pairs()
-        else:
-            results["Forex"] = []
-        
-        reply = "🌐 <b>Multi-Platform Asset Scanner</b>\n\n"
+        reply = "📊 <b>Multi-Platform Market Overview</b>\n\n"
         
         for platform, assets in results.items():
-            reply += f"<b>{platform.upper()}</b>\n"
-            
             if not assets:
-                reply += "  • No assets found\n\n"
                 continue
                 
+            reply += f"<b>🔹 {platform.upper()}</b>\n"
+            
             for i, asset in enumerate(assets[:3], 1):
                 if platform == "Solana":
                     symbol = asset.get('baseToken', {}).get('symbol', 'Unknown')
@@ -755,18 +785,39 @@ async def multi_platform_scan(update: Update, context: ContextTypes.DEFAULT_TYPE
                     change = asset.get('priceChange', {}).get('h24', 'N/A')
                     reply += f"  {i}. {symbol}: ${price} ({change}%)\n"
                 elif platform == "Pump.fun":
-                    reply += f"  {i}. {asset.symbol}: ${asset.current_price:.8f} ({asset.change_24h:.2f}%)\n"
+                    reply += f"  {i}. {asset.symbol}: ${asset.current_price:.8f}\n"
                 elif platform == "BullX":
-                    reply += f"  {i}. {asset.symbol}: ${asset.current_price:.4f} ({asset.change_24h:.2f}%)\n"
+                    reply += f"  {i}. {asset.symbol}: ${asset.current_price:.4f}\n"
                 elif platform == "Forex":
                     reply += f"  {i}. {asset.symbol}: {asset.current_price:.4f}\n"
             
             reply += "\n"
         
-        await update.message.reply_html(reply)
+        if reply == "📊 <b>Multi-Platform Market Overview</b>\n\n":
+            await scanning_msg.edit_text("⚠️ All platforms are quiet right now. No trending assets found.")
+            return
+            
+        await scanning_msg.edit_text(reply, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Multi-platform scan error: {e}")
-        await update.message.reply_text("⚠️ Error scanning platforms. Try again later.")
+        await update.message.reply_text("⚠️ System is busy scanning multiple platforms. Please try again later.")
+
+# Utility function to shorten addresses
+def shorten_address(address: str, chars: int = 6) -> str:
+    return f"{address[:chars]}...{address[-chars:]}" if address else ""
+
+# Currency flag emojis for better visual representation
+FLAG_EMOJIS = {
+    "USD": "🇺🇸",
+    "EUR": "🇪🇺",
+    "GBP": "🇬🇧",
+    "JPY": "🇯🇵",
+    "AUD": "🇦🇺",
+    "CAD": "🇨🇦",
+    "CHF": "🇨🇭",
+    "CNY": "🇨🇳",
+    "NZD": "🇳🇿"
+}
       
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
