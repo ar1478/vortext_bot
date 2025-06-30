@@ -10,3 +10,6 @@ scipy
 matplotlib
 seaborn
 python-dotenv
+aiofiles
+seaborn
+jsonschema
