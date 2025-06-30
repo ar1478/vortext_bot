@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict, field
 from enum import Enum
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
                           ContextTypes, filters, ConversationHandler, CallbackQueryHandler)
 from telegram.error import Conflict
