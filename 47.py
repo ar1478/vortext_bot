@@ -24,11 +24,17 @@ class TradingBot:
         self.alerts = {}
         self.client = httpx.AsyncClient(timeout=30.0)
         
-        # API endpoints
+        # API endpoints and keys
+        self.api_keys = {
+            'birdeye': '797cf979b7754efa9bf6f5e1a1370f7a',
+            'apilayer': 'pKtM2FQSYAgwBKOYwFowIwHNDJG49UNk'
+        }
+        
         self.apis = {
+            'birdeye': 'https://public-api.birdeye.so',
             'dexscreener': 'https://api.dexscreener.com/latest/dex',
             'jupiter': 'https://price.jup.ag/v4/price',
-            'forex': 'https://api.exchangerate-api.com/v4/latest/USD',
+            'apilayer_forex': 'https://api.apilayer.com/fixer',
             'coingecko': 'https://api.coingecko.com/api/v3'
         }
         
@@ -45,6 +51,9 @@ class TradingBot:
             CommandHandler("alerts", self.view_alerts),
             CommandHandler("pnl", self.calculate_pnl),
             CommandHandler("forex", self.forex_rates),
+            CommandHandler("forexpair", self.forex_pair),
+            CommandHandler("birdeye", self.birdeye_search),
+            CommandHandler("trending", self.birdeye_trending),
             CommandHandler("top", self.top_gainers),
             CallbackQueryHandler(self.button_handler)
         ]
@@ -57,9 +66,12 @@ class TradingBot:
         keyboard = [
             [InlineKeyboardButton("📊 Portfolio", callback_data="portfolio")],
             [InlineKeyboardButton("🔍 Scan Markets", callback_data="scan"),
-             InlineKeyboardButton("⭐ Watchlist", callback_data="watchlist")],
+             InlineKeyboardButton("🐦 BirdEye Search", callback_data="birdeye")],
+            [InlineKeyboardButton("⭐ Watchlist", callback_data="watchlist"),
+             InlineKeyboardButton("🔥 Trending", callback_data="trending")],
             [InlineKeyboardButton("📈 Top Gainers", callback_data="top_gainers"),
-             InlineKeyboardButton("💱 Forex", callback_data="forex")]
+             InlineKeyboardButton("💱 Forex Rates", callback_data="forex")],
+            [InlineKeyboardButton("💰 Forex Pairs", callback_data="forex_pairs")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -92,9 +104,34 @@ class TradingBot:
             await update.message.reply_text("📝 You're already registered!")
     
     async def scan_tokens(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Scan trending Solana tokens"""
+        """Scan trending tokens using BirdEye and DexScreener"""
         try:
-            # Get trending tokens from DexScreener
+            # First try BirdEye API
+            birdeye_data = await self.get_birdeye_trending()
+            
+            if birdeye_data:
+                message = "🐦 *BirdEye Trending Tokens*\n\n"
+                
+                for i, token in enumerate(birdeye_data[:8], 1):
+                    price = token.get('price', 0)
+                    change_24h = token.get('priceChange24hPercent', 0)
+                    volume = token.get('volume24h', 0)
+                    name = token.get('name', 'Unknown')
+                    symbol = token.get('symbol', 'N/A')
+                    
+                    emoji = "🟢" if change_24h > 0 else "🔴"
+                    
+                    message += (
+                        f"{i}. {emoji} *{name} ({symbol})*\n"
+                        f"   💰 ${price:.6f}\n"
+                        f"   📊 {change_24h:+.2f}% (24h)\n"
+                        f"   📈 Vol: ${volume:,.0f}\n\n"
+                    )
+                
+                await update.message.reply_text(message, parse_mode='Markdown')
+                return
+            
+            # Fallback to DexScreener
             url = f"{self.apis['dexscreener']}/pairs/solana"
             response = await self.client.get(url)
             data = response.json()
@@ -223,14 +260,18 @@ class TradingBot:
         await update.message.reply_text(message, parse_mode='Markdown')
     
     async def forex_rates(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show forex rates"""
+        """Show forex rates using API Layer"""
         try:
-            response = await self.client.get(self.apis['forex'])
+            headers = {'apikey': self.api_keys['apilayer']}
+            url = f"{self.apis['apilayer_forex']}/latest"
+            params = {'base': 'USD'}
+            
+            response = await self.client.get(url, headers=headers, params=params)
             data = response.json()
             
-            if 'rates' in data:
+            if data.get('success') and 'rates' in data:
                 rates = data['rates']
-                major_pairs = ['EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF']
+                major_pairs = ['EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'INR']
                 
                 message = "💱 *Major Forex Rates (USD Base)*\n\n"
                 
@@ -241,7 +282,14 @@ class TradingBot:
                 
                 message += f"\n📅 Updated: {data.get('date', 'Unknown')}"
                 
-                await update.message.reply_text(message, parse_mode='Markdown')
+                keyboard = [[InlineKeyboardButton("💰 Check Specific Pairs", callback_data="forex_pairs")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    message, 
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
             else:
                 await update.message.reply_text("❌ Unable to fetch forex data")
                 
@@ -249,7 +297,129 @@ class TradingBot:
             logger.error(f"Forex error: {e}")
             await update.message.reply_text("⚠️ Error fetching forex rates")
     
-    async def top_gainers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def forex_pair(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get specific forex pair rates"""
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "Usage: /forexpair <from> <to>\n"
+                "Example: /forexpair EUR USD"
+            )
+            return
+        
+        from_currency = context.args[0].upper()
+        to_currency = context.args[1].upper()
+        
+        try:
+            headers = {'apikey': self.api_keys['apilayer']}
+            url = f"{self.apis['apilayer_forex']}/convert"
+            params = {
+                'from': from_currency,
+                'to': to_currency,
+                'amount': 1
+            }
+            
+            response = await self.client.get(url, headers=headers, params=params)
+            data = response.json()
+            
+            if data.get('success'):
+                rate = data['result']
+                
+                message = (
+                    f"💱 *Forex Conversion*\n\n"
+                    f"1 {from_currency} = {rate:.4f} {to_currency}\n"
+                    f"📅 Date: {data.get('date', 'Unknown')}\n"
+                    f"⏰ Updated: {datetime.now().strftime('%H:%M:%S')}"
+                )
+                
+                await update.message.reply_text(message, parse_mode='Markdown')
+            else:
+                await update.message.reply_text(
+                    f"❌ Invalid currency pair: {from_currency}/{to_currency}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Forex pair error: {e}")
+            await update.message.reply_text("⚠️ Error fetching forex pair data")
+    
+    async def birdeye_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Search tokens using BirdEye"""
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /birdeye <token_name_or_symbol>\n"
+                "Example: /birdeye BONK"
+            )
+            return
+        
+        query = " ".join(context.args)
+        
+        try:
+            headers = {'X-API-KEY': self.api_keys['birdeye']}
+            url = f"{self.apis['birdeye']}/defi/search"
+            params = {'keyword': query, 'limit': 10}
+            
+            response = await self.client.get(url, headers=headers, params=params)
+            data = response.json()
+            
+            if data.get('success') and data.get('data', {}).get('tokens'):
+                tokens = data['data']['tokens'][:5]  # Top 5 results
+                
+                message = f"🐦 *BirdEye Search Results for '{query}'*\n\n"
+                
+                for i, token in enumerate(tokens, 1):
+                    name = token.get('name', 'Unknown')
+                    symbol = token.get('symbol', 'N/A')
+                    price = token.get('price', 0)
+                    change_24h = token.get('priceChange24hPercent', 0)
+                    mc = token.get('mc', 0)
+                    
+                    emoji = "🟢" if change_24h > 0 else "🔴"
+                    
+                    message += (
+                        f"{i}. {emoji} *{name} ({symbol})*\n"
+                        f"   💰 ${price:.6f}\n"
+                        f"   📊 {change_24h:+.2f}% (24h)\n"
+                        f"   💎 MC: ${mc:,.0f}\n\n"
+                    )
+                
+                await update.message.reply_text(message, parse_mode='Markdown')
+            else:
+                await update.message.reply_text(f"❌ No tokens found for '{query}'")
+                
+        except Exception as e:
+            logger.error(f"BirdEye search error: {e}")
+            await update.message.reply_text("⚠️ Error searching tokens")
+    
+    async def birdeye_trending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get trending tokens from BirdEye"""
+        try:
+            trending_data = await self.get_birdeye_trending()
+            
+            if trending_data:
+                message = "🔥 *BirdEye Trending Tokens*\n\n"
+                
+                for i, token in enumerate(trending_data[:10], 1):
+                    name = token.get('name', 'Unknown')
+                    symbol = token.get('symbol', 'N/A')
+                    price = token.get('price', 0)
+                    change_24h = token.get('priceChange24hPercent', 0)
+                    volume = token.get('volume24h', 0)
+                    
+                    emoji = "🟢" if change_24h > 0 else "🔴"
+                    
+                    message += (
+                        f"{i}. {emoji} *{name} ({symbol})*\n"
+                        f"   💰 ${price:.6f}\n"
+                        f"   📊 {change_24h:+.2f}% (24h)\n"
+                        f"   📈 Vol: ${volume:,.0f}\n\n"
+                    )
+                
+                await update.message.reply_text(message, parse_mode='Markdown')
+            else:
+                await update.message.reply_text("❌ Unable to fetch trending data")
+                
+        except Exception as e:
+            logger.error(f"BirdEye trending error: {e}")
+            await update.message.reply_text("⚠️ Error fetching trending tokens")
         """Show top gaining tokens"""
         try:
             url = f"{self.apis['coingecko']}/coins/markets"
@@ -289,7 +459,12 @@ class TradingBot:
     async def get_token_price(self, token: str) -> Optional[Dict]:
         """Get token price from multiple sources"""
         try:
-            # Try Jupiter API first (for Solana tokens)
+            # Try BirdEye first
+            birdeye_price = await self.get_birdeye_price(token)
+            if birdeye_price:
+                return birdeye_price
+            
+            # Try Jupiter API (for Solana tokens)
             response = await self.client.get(f"{self.apis['jupiter']}?ids={token}")
             data = response.json()
             
@@ -311,6 +486,42 @@ class TradingBot:
         
         return None
     
+    async def get_birdeye_price(self, token: str) -> Optional[Dict]:
+        """Get token price from BirdEye"""
+        try:
+            headers = {'X-API-KEY': self.api_keys['birdeye']}
+            url = f"{self.apis['birdeye']}/defi/price"
+            params = {'address': token}
+            
+            response = await self.client.get(url, headers=headers, params=params)
+            data = response.json()
+            
+            if data.get('success') and 'data' in data:
+                return {'price': float(data['data']['value'])}
+                
+        except Exception as e:
+            logger.error(f"BirdEye price error: {e}")
+        
+        return None
+    
+    async def get_birdeye_trending(self) -> Optional[List[Dict]]:
+        """Get trending tokens from BirdEye"""
+        try:
+            headers = {'X-API-KEY': self.api_keys['birdeye']}
+            url = f"{self.apis['birdeye']}/defi/trending"
+            params = {'limit': 20}
+            
+            response = await self.client.get(url, headers=headers, params=params)
+            data = response.json()
+            
+            if data.get('success') and 'data' in data:
+                return data['data']
+                
+        except Exception as e:
+            logger.error(f"BirdEye trending error: {e}")
+        
+        return None
+    
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle button callbacks"""
         query = update.callback_query
@@ -322,6 +533,26 @@ class TradingBot:
             await self.scan_tokens(update, context)
         elif query.data == "forex":
             await self.forex_rates(update, context)
+        elif query.data == "forex_pairs":
+            await query.edit_message_text(
+                "💰 *Forex Pair Converter*\n\n"
+                "Use: `/forexpair <from> <to>`\n"
+                "Example: `/forexpair EUR USD`\n\n"
+                "Popular pairs:\n"
+                "• EUR/USD, GBP/USD, USD/JPY\n"
+                "• USD/CAD, AUD/USD, USD/CHF",
+                parse_mode='Markdown'
+            )
+        elif query.data == "birdeye":
+            await query.edit_message_text(
+                "🐦 *BirdEye Search*\n\n"
+                "Use: `/birdeye <token_name>`\n"
+                "Example: `/birdeye BONK`\n\n"
+                "Or use `/trending` for trending tokens",
+                parse_mode='Markdown'
+            )
+        elif query.data == "trending":
+            await self.birdeye_trending(update, context)
         elif query.data == "top_gainers":
             await self.top_gainers(update, context)
     
