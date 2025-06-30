@@ -30,7 +30,7 @@ class Config:
     PUMP_FUN_API_URL = "https://api.pump.fun"
     BULLX_API_URL = "https://api.bullx.io/v1"
     FOREX_API_URL = "https://api.apilayer.com/exchangerates_data/"
-    FOREX_API_KEY = os.getenv("FOREX_API_KEY")
+    FOREX_API_KEY = os.getenv("pKtM2FQSYAgwBKOYwFowIwHNDJG49UNk")
     
     # Data persistence
     DATA_FILE = "user_data.json"
@@ -647,8 +647,8 @@ async def pumpfun_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bullx_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Realistic BullX.io scanner"""
     try:
-        limit = min(int(context.args[0]) if context.args and context.args[0].isdigit() else 5
-        limit = min(limit, 10)  # API limit
+        limit = min(int(context.args[0]) if context.args and context.args[0].isdigit() else 5,10)
+         # API limit
         
         scanning_msg = await update.message.reply_text("🔍 Scanning BullX.io tokens...")
         
