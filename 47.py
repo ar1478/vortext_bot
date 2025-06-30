@@ -602,7 +602,7 @@ async def watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pumpfun_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Realistic Pump.fun scanner with market patterns"""
     try:
-        limit = min(int(context.args[0]) if context.args and context.args[0].isdigit() else 5
+        limit = min(int(context.args[0]) if (context.args and context.args[0].isdigit()) else 5
         limit = min(limit, 10)  # API limit
         
         scanning_msg = await update.message.reply_text("🔍 Scanning Pump.fun tokens...")
