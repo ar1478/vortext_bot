@@ -651,7 +651,7 @@ class TradingBot:
 
 # Usage example
 async def main():
-    BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # Get from @BotFather
+    BOT_TOKEN = "8152282783:AAH0ylvc63x_u1e15ST0-4zjQe_K4b4bVRc"  # Get from @BotFather
     
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         print("Please set your Telegram bot token!")
