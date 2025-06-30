@@ -25,7 +25,7 @@ class Config:
     JUPITER_API_URL = "https://quote-api.jup.ag/v6"
     DEX_SCREENER_URL = "https://api.dexscreener.com/latest/dex/search"
     BIRDEYE_API_URL = "https://public-api.birdeye.so"
-    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY") 
+    BIRDEYE_API_KEY = os.getenv("797cf979b7754efa9bf6f5e1a1370f7a") 
     # New platform integrations
     PUMP_FUN_API_URL = "https://api.pump.fun"
     BULLX_API_URL = "https://api.bullx.io/v1"
@@ -602,8 +602,7 @@ async def watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pumpfun_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Realistic Pump.fun scanner with market patterns"""
     try:
-        limit = min(int(context.args[0]) if (context.args and context.args[0].isdigit()) else 5
-        limit = min(limit, 10)  # API limit
+        limit = min(int(context.args[0]) if (context.args and context.args[0].isdigit()) else 5, 10)
         
         scanning_msg = await update.message.reply_text("🔍 Scanning Pump.fun tokens...")
         
