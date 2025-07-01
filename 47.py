@@ -757,6 +757,84 @@ class TradingBot:
                 logger.error(f"Alert monitor error: {e}")
                 await asyncio.sleep(30)
 
+    # ======================
+    # MISSING METHODS (PLACEHOLDERS)
+    # ======================
+    
+    async def balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for balance command"""
+        await update.message.reply_text("Balance feature coming soon!")
+
+    async def portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for portfolio command"""
+        await update.message.reply_text("Portfolio tracking coming soon!")
+
+    async def add_watchlist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for add to watchlist command"""
+        await update.message.reply_text("Watchlist feature coming soon!")
+
+    async def view_watchlist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for view watchlist command"""
+        await update.message.reply_text("Watchlist viewer coming soon!")
+
+    async def set_alert(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for set alert command"""
+        await update.message.reply_text("Price alerts coming soon!")
+
+    async def scan_tokens(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for scan tokens command"""
+        await update.message.reply_text("Token scanner coming soon!")
+
+    async def birdeye_trending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for birdeye trending command"""
+        await update.message.reply_text("Birdeye trending tokens coming soon!")
+
+    async def top_gainers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for top gainers command"""
+        await update.message.reply_text("Top gainers analysis coming soon!")
+
+    async def advanced_scan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for advanced scan command"""
+        await update.message.reply_text("Advanced scanner coming soon!")
+
+    async def sentiment_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for sentiment analysis command"""
+        await update.message.reply_text("Sentiment analysis coming soon!")
+
+    async def birdeye_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for birdeye search command"""
+        await update.message.reply_text("Birdeye search coming soon!")
+
+    async def multiscan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for multiscan command"""
+        await update.message.reply_text("Multi-platform scanner coming soon!")
+
+    async def bullx_scan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Placeholder for bullx scan command"""
+        await update.message.reply_text("BullX scanner coming soon!")
+
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline button presses"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Map button callbacks to actual commands
+        command_map = {
+            "portfolio": self.portfolio,
+            "scan": self.scan_tokens,
+            "birdeye": self.birdeye_search,
+            "trending": self.birdeye_trending,
+            "pumpfun": self.pumpfun_scan,
+            "top_gainers": self.top_gainers,
+            "forex": self.forex_rates,
+            "ai_analysis": lambda u, c: u.message.reply_text("Use /ai_analysis <token>")
+        }
+        
+        if query.data in command_map:
+            await command_map[query.data](update, context)
+        else:
+            await query.edit_message_text(text=f"Action for '{query.data}' not implemented yet")
+
     async def run(self):
         """Start the bot"""
         await self.load_user_data()
