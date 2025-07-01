@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class TradingBot:
-   def __init__(self, token: str):
+    def __init__(self, token: str):
         self.token = token
         self.app = Application.builder().token(token).build()
         self.users_data = {}
@@ -200,7 +200,8 @@ class TradingBot:
         )
         
         await update.message.reply_text(status_text, parse_mode='Markdown')
-            # ========================
+    
+    # ========================
     # REAL-TIME DATA FUNCTIONS
     # ========================
     
@@ -547,7 +548,8 @@ class TradingBot:
         except Exception as e:
             logger.error(f"DeFi opportunities error: {e}")
             await update.message.reply_text("⚠️ Error fetching yield data")
-                # ======================
+    
+    # ======================
     # ANALYSIS & FOREX
     # ======================
     
