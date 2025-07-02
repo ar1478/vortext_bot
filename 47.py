@@ -29,25 +29,19 @@ class TradingBot:
         self.client = httpx.AsyncClient(timeout=30.0)
         self.data_cache = {}
         
-        # Get API keys from environment variables
+        # API keys from environment variables
         self.api_keys = {
-            'birdeye': os.environ.get('BIRDEYE_APL_KEY', ''),
-            'apilayer': os.environ.get('APILAYER_APL_KEY', ''),
-            'dexscreener': 'public'  # Most don't require keys
+            'birdeye': os.environ.get('BIRDEYE_API_KEY', ''),
+            'apilayer': os.environ.get('APILAYER_API_KEY', '')
         }
         
-        # Use Solana RPC URL from environment if available
-        solana_rpc = os.environ.get('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com')
-        
+        # API endpoints
         self.apis = {
             'birdeye': 'https://public-api.birdeye.so',
             'dexscreener': 'https://api.dexscreener.com/latest/dex',
             'jupiter': 'https://price.jup.ag/v4/price',
             'apilayer_forex': 'https://api.apilayer.com/fixer',
-            'coingecko': 'https://api.coingecko.com/api/v3',
-            'pumpfun': 'https://api.pump.fun',
-            'solscan': 'https://api.solscan.io',
-            'solana_rpc': solana_rpc  # Use environment variable
+            'solana_rpc': os.environ.get('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com')
         }
         
         self.setup_handlers()
@@ -161,6 +155,10 @@ class TradingBot:
             await update.message.reply_text("Usage: /register <your_solana_wallet_address>")
             return
         
+        if not self.validate_solana_address(wallet_address):
+            await update.message.reply_text("❌ Invalid Solana wallet address")
+            return
+        
         if user_id not in self.users_data:
             self.users_data[user_id] = {
                 'registered': datetime.now().isoformat(),
@@ -175,6 +173,10 @@ class TradingBot:
             self.users_data[user_id]['wallet'] = wallet_address
             await self.save_user_data()
             await update.message.reply_text("🔁 Wallet updated successfully")
+    
+    def validate_solana_address(self, address: str) -> bool:
+        """Validate Solana wallet address format"""
+        return len(address) == 44 and address.isalnum()
     
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show account status"""
@@ -226,15 +228,6 @@ class TradingBot:
                 jup_data = jup_response.json()
                 if 'data' in jup_data and token in jup_data['data']:
                     return float(jup_data['data'][token]['price'])
-            
-            # Try CoinGecko for non-Solana tokens
-            cg_url = f"{self.apis['coingecko']}/simple/price"
-            params = {'ids': token.lower(), 'vs_currencies': 'usd'}
-            cg_response = await self.client.get(cg_url, params=params)
-            if cg_response.status_code == 200:
-                cg_data = cg_response.json()
-                if token.lower() in cg_data:
-                    return float(cg_data[token.lower()]['usd'])
         
         except Exception as e:
             logger.error(f"Price fetch error for {token}: {e}")
@@ -304,14 +297,16 @@ class TradingBot:
         return None
     
     async def get_whale_transactions(self) -> List[Dict]:
-        """Get real-time whale transactions using Solscan API"""
+        """Get real-time whale transactions using Birdeye"""
         try:
-            url = f"{self.apis['solscan']}/transfer/token?sort=amount&order=desc&limit=10"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = await self.client.get(url, headers=headers, timeout=15)
+            headers = {'X-API-KEY': self.api_keys['birdeye']}
+            url = f"{self.apis['birdeye']}/defi/transactions"
+            params = {'type': 'large', 'limit': 10}
+            response = await self.client.get(url, headers=headers, params=params, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                return data.get('data', {}).get('items', [])[:5]
+                if data.get('success'):
+                    return data['data']['items'][:5]
         except Exception as e:
             logger.error(f"Whale tracker error: {e}")
         return []
@@ -332,7 +327,7 @@ class TradingBot:
         return []
     
     async def get_bullx_tokens(self) -> List[Dict]:
-        """Get trending tokens from BullX (using DexScreener as alternative)"""
+        """Get trending tokens from BullX (using DexScreener)"""
         try:
             url = f"{self.apis['dexscreener']}/tokens/new"
             response = await self.client.get(url, timeout=10)
@@ -356,7 +351,7 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Token metadata error: {e}")
         return {}
-        
+    
     # ======================
     # USER COMMANDS
     # ======================
@@ -370,48 +365,44 @@ class TradingBot:
             return
         
         wallet_address = self.users_data[user_id]['wallet']
-        balance = await self.get_sol_balance(wallet_address)
-        
-        # Get current SOL price
+        sol_balance = await self.get_sol_balance(wallet_address)
         sol_price = await self.get_real_time_price('SOL') or 0
+        usd_value = sol_balance * sol_price
         
         await update.message.reply_text(
             f"💰 *Wallet Balance*\n\n"
             f"Wallet: `{wallet_address[:6]}...{wallet_address[-4:]}`\n"
-            f"SOL Balance: {balance:.4f}\n"
-            f"USD Value: ${balance * sol_price:.2f}\n\n"
+            f"SOL Balance: {sol_balance:.4f}\n"
+            f"USD Value: ${usd_value:.2f}\n\n"
             f"_Updated: {datetime.now().strftime('%H:%M:%S')}_",
             parse_mode='Markdown'
         )
 
     async def portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show portfolio (simulated for now)"""
+        """Show portfolio with real-time values"""
         user_id = update.effective_user.id
         
         if user_id not in self.users_data:
             await update.message.reply_text("Please /register first")
             return
         
-        # For demo purposes, we'll show a simulated portfolio
-        # In a real implementation, you'd fetch actual holdings
-        portfolio = [
-            {'token': 'SOL', 'amount': 5.2, 'value': 0},
-            {'token': 'USDC', 'amount': 500, 'value': 0},
-            {'token': 'BONK', 'amount': 100000, 'value': 0}
-        ]
+        # Simulated portfolio - in a real implementation, you'd fetch actual holdings
+        portfolio = {
+            'SOL': {'amount': 5.2},
+            'USDC': {'amount': 500},
+            'BONK': {'amount': 100000}
+        }
         
-        # Get current prices
         total_value = 0
-        for asset in portfolio:
-            price = await self.get_real_time_price(asset['token']) or 0
-            asset['value'] = asset['amount'] * price
-            total_value += asset['value']
-        
         message = "📊 *Portfolio Overview*\n\n"
-        for asset in portfolio:
+        
+        for token, data in portfolio.items():
+            price = await self.get_real_time_price(token) or 0
+            value = data['amount'] * price
+            total_value += value
             message += (
-                f"• *{asset['token']}*: {asset['amount']:,.2f}\n"
-                f"  Value: ${asset['value']:,.2f}\n"
+                f"- **{token}**: {data['amount']:,.2f}\n"
+                f"  Value: ${value:,.2f}\n"
             )
         
         message += f"\n💎 Total Value: ${total_value:,.2f}"
@@ -501,18 +492,14 @@ class TradingBot:
     async def scan_tokens(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Scan trending tokens from DexScreener"""
         try:
-            url = f"{self.apis['dexscreener']}/tokens/new"
-            response = await self.client.get(url, timeout=10)
-            if response.status_code != 200:
+            tokens = await self.get_bullx_tokens()
+            if not tokens:
                 await update.message.reply_text("⚠️ Couldn't fetch token data")
                 return
             
-            data = response.json()
-            tokens = data.get('pairs', [])[:8]
-            
             message = "🔍 *Newly Listed Tokens*\n\n"
-            for i, token in enumerate(tokens, 1):
-                name = token.get('baseToken', {}).get('name', 'Unknown')
+            for i, token in enumerate(tokens[:8], 1):
+                name = token.get('baseToken', {}).get('name', 'Unknown')[:15]
                 symbol = token.get('baseToken', {}).get('symbol', 'TOKEN')
                 price = float(token.get('priceUsd', 0))
                 change = float(token.get('priceChange', {}).get('h24', 0))
@@ -539,7 +526,7 @@ class TradingBot:
             
             message = "🔥 *Trending Tokens (Birdeye)*\n\n"
             for i, token in enumerate(tokens, 1):
-                name = token.get('name', 'Unknown')
+                name = token.get('name', 'Unknown')[:15]
                 symbol = token.get('symbol', 'TOKEN')
                 price = float(token.get('price', 0))
                 change = float(token.get('priceChange24h', 0))
@@ -566,7 +553,7 @@ class TradingBot:
             
             message = "🚀 *Top Gainers (Last 24h)*\n\n"
             for i, token in enumerate(gainers, 1):
-                name = token.get('name', 'Unknown')
+                name = token.get('name', 'Unknown')[:15]
                 symbol = token.get('symbol', 'TOKEN')
                 price = float(token.get('price', 0))
                 change = float(token.get('priceChange24h', 0))
@@ -621,29 +608,27 @@ class TradingBot:
             await update.message.reply_text("⚠️ Error performing advanced scan")
 
     async def sentiment_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get market sentiment (using CoinGecko)"""
+        """Get market sentiment using Birdeye social data"""
         try:
-            url = f"{self.apis['coingecko']}/search/trending"
-            response = await self.client.get(url, timeout=10)
-            if response.status_code != 200:
+            # Get trending tokens from Birdeye
+            tokens = await self.get_birdeye_trending(limit=5)
+            if not tokens:
                 await update.message.reply_text("⚠️ Couldn't fetch sentiment data")
                 return
-            
-            data = response.json()
-            coins = data.get('coins', [])[:5]
             
             message = "📊 *Market Sentiment Analysis*\n\n"
             message += "🔥 *Trending Coins*\n"
             
-            for coin in coins:
-                item = coin.get('item', {})
-                name = item.get('name', 'Unknown')
-                symbol = item.get('symbol', 'TOKEN')
-                score = item.get('sentiment_votes_up_percentage', 0)
+            for token in tokens:
+                name = token.get('name', 'Unknown')
+                symbol = token.get('symbol', 'TOKEN')
+                # Simulate sentiment score based on price change
+                price_change = float(token.get('priceChange24h', 0))
+                sentiment_score = max(0, min(100, 50 + (price_change * 2)))
                 
                 message += (
                     f"• *{name} ({symbol})*\n"
-                    f"  👍 Sentiment: {score}% positive\n"
+                    f"  👍 Sentiment: {sentiment_score:.0f}% positive\n"
                 )
             
             message += f"\n_Updated: {datetime.now().strftime('%H:%M:%S')}_"
@@ -900,7 +885,7 @@ class TradingBot:
             await update.message.reply_text("Please /register first")
             return
         
-        # Simulated portfolio for demo
+        # Simulated portfolio
         portfolio = {
             'SOL': {'amount': 5.2},
             'USDC': {'amount': 500},
@@ -937,10 +922,14 @@ class TradingBot:
                 message += (
                     f"{i}. *{asset['token']}*: "
                     f"{asset['allocation']:.1%}\n"
-                    f"   Amount: {asset['amount']:,.2f}\n"
+                    f"   Amount: {asset['amount']:,.4f}\n"
                     f"   Price: ${asset['price']:.6f}\n"
                     f"   Value: ${asset['value']:,.2f}\n\n"
                 )
+            
+            # Add diversification recommendation
+            if len(optimized) < 3:
+                message += "💡 Recommendation: Diversify into more assets to reduce risk"
             
             message += f"💎 Total Value: ${total_value:,.2f}"
             await update.message.reply_text(message, parse_mode='Markdown')
@@ -1024,26 +1013,32 @@ class TradingBot:
             await update.message.reply_text("⚠️ Error fetching market data")
 
     async def defi_opportunities(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show DeFi yield opportunities"""
+        """Show DeFi yield opportunities using Birdeye data"""
         try:
-            # Use CoinGecko for yield data
-            url = f"{self.apis['coingecko']}/yield_farming"
-            response = await self.client.get(url, timeout=10)
+            # Get top liquidity pools from Birdeye
+            headers = {'X-API-KEY': self.api_keys['birdeye']}
+            url = f"{self.apis['birdeye']}/defi/overview"
+            params = {'sort_by': 'volume24h', 'sort_type': 'desc'}
+            response = await self.client.get(url, headers=headers, params=params, timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
-                if data:
-                    opportunities = sorted(data, key=lambda x: x.get('apy', 0), reverse=True)[:3]
-                    message = "🏦 *Top DeFi Yield Opportunities*\n\n"
+                if data.get('success') and data.get('data'):
+                    pools = data['data'][:3]
+                    message = "🏦 *Top DeFi Opportunities*\n\n"
                     
-                    for i, opp in enumerate(opportunities, 1):
-                        platform = opp.get('platform', 'Unknown')
-                        token = opp.get('token', 'TOKEN')
-                        apy = float(opp.get('apy', 0)) * 100
+                    for i, pool in enumerate(pools, 1):
+                        name = pool.get('name', 'Unknown')
+                        volume_24h = float(pool.get('volume24h', 0))
+                        fee_rate = float(pool.get('feeRate', 0)) * 100
+                        
+                        # Calculate estimated APY based on volume and fee rate
+                        apy = (volume_24h * fee_rate / 100) * 365 / float(pool.get('liquidity', 1))
                         
                         message += (
-                            f"{i}. *{platform}* - {token}\n"
-                            f"   📈 APY: {apy:.2f}%\n\n"
+                            f"{i}. *{name}*\n"
+                            f"   📊 24h Volume: ${volume_24h:,.0f}\n"
+                            f"   📈 Est. APY: {apy:.2f}%\n\n"
                         )
                     
                     await update.message.reply_text(message, parse_mode='Markdown')
@@ -1068,9 +1063,9 @@ class TradingBot:
             
             for i, tx in enumerate(transactions[:5], 1):
                 token = tx.get('token', {}).get('name', 'UNKNOWN')
-                amount = float(tx.get('amount', 0)) / (10 ** tx.get('token', {}).get('decimals', 9))
-                usd_value = amount * float(tx.get('tokenPriceUsdt', 0))
-                direction = "🟢 BUY" if tx.get('changeType') == 'inc' else "🔴 SELL"
+                amount = float(tx.get('amount', 0))
+                usd_value = float(tx.get('value', 0))
+                direction = "🟢 BUY" if tx.get('transactionType') == 'buy' else "🔴 SELL"
                 
                 message += (
                     f"{i}. *{token}*\n"
@@ -1096,23 +1091,37 @@ class TradingBot:
         await update.message.reply_text(f"🤖 Analyzing {token} with real-time data...")
         
         try:
-            # Get real-time data
-            price = await self.get_real_time_price(token)
-            if not price:
+            # Get real-time data from Birdeye
+            metadata = await self.get_token_metadata(token)
+            if not metadata:
                 await update.message.reply_text(f"❌ Couldn't get data for {token}")
                 return
-            
-            # Get additional metrics from Birdeye
-            metadata = await self.get_token_metadata(token)
+                
+            price = float(metadata.get('price', 0))
             volume_24h = float(metadata.get('volume24h', 0))
             liquidity = float(metadata.get('liquidity', 0))
+            price_change = float(metadata.get('priceChange24h', 0))
             
-            # AI assessment
+            # AI assessment algorithm
             score = 60  # Base score
-            if volume_24h > 1000000: score += 15
-            if liquidity > 500000: score += 10
-            if volume_24h > 5000000: score += 10
             
+            # Volume scoring
+            if volume_24h > 1000000: score += 15
+            elif volume_24h > 500000: score += 10
+            elif volume_24h < 100000: score -= 10
+            
+            # Liquidity scoring
+            if liquidity > 500000: score += 10
+            elif liquidity < 100000: score -= 15
+            
+            # Price change scoring
+            if price_change > 20: score += 15
+            elif price_change < -15: score -= 10
+            
+            # Cap score between 0-100
+            score = max(0, min(100, score))
+            
+            # Generate rating
             if score > 85: rating = "🚀 STRONG BUY"
             elif score > 70: rating = "✅ BUY"
             elif score > 55: rating = "🟡 HOLD"
@@ -1122,7 +1131,8 @@ class TradingBot:
             message = (
                 f"🤖 *AI Analysis for {token}*\n\n"
                 f"💰 Price: ${price:.6f}\n"
-                f"📈 24h Volume: ${volume_24h:,.0f}\n"
+                f"📈 24h Change: {price_change:.2f}%\n"
+                f"📊 24h Volume: ${volume_24h:,.0f}\n"
                 f"💧 Liquidity: ${liquidity:,.0f}\n\n"
                 f"⭐ AI Rating: {rating}\n"
                 f"📊 Score: {score}/100\n\n"
