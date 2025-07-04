@@ -23,7 +23,6 @@ from telegram.ext import (
 )
 
 # Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -45,9 +44,9 @@ class TradingBot:
         
         # API keys from environment variables
         self.api_keys = {
-            'birdeye': os.environ.get('BIRDEYE_API_KEY', ''),
-            'apilayer': os.environ.get('APILAYER_API_KEY', ''),
-            'coingecko': os.environ.get('COINGECKO_API_KEY', '')
+            'birdeye': os.getenv('BIRDEYE_API_KEY', ''),
+            'apilayer': os.getenv('APILAYER_API_KEY', ''),
+            'coingecko': os.getenv('COINGECKO_API_KEY', '')
         }
         
         # API endpoints
@@ -57,7 +56,7 @@ class TradingBot:
             'jupiter': 'https://price.jup.ag/v4/price',
             'apilayer_forex': 'https://api.apilayer.com/fixer',
             'coingecko': 'https://pro-api.coingecko.com/api/v3',
-            'solana_rpc': os.environ.get('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com'),
+            'solana_rpc': os.getenv('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com'),
             'pumpfun': 'https://api.pump.fun/tokens',
             'dexscreener_solana': 'https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112',
             'coinmarketcap': 'https://pro-api.coinmarketcap.com/v1/cryptocurrency',
@@ -2236,12 +2235,11 @@ if __name__ == "__main__":
         exit(1)
     
     # Add API key validation
-    required_keys = ['BIRDEYE_API_KEY', 'APILAYER_API_KEY']
-    missing_keys = [key for key in required_keys if not os.environ.get(key)]
-    
-    if missing_keys:
-        logger.error(f"Missing required API keys: {', '.join(missing_keys)}")
-        logger.error("Some features will be limited")
+   logger.info("Starting bot with configured API keys")
+if not os.getenv("BIRDEYE_API_KEY"):
+    logger.warning("Birdeye API key not set - some features will be limited")
+if not os.getenv("APILAYER_API_KEY"):
+    logger.warning("APILayer key not set - forex features will use mock data")
     
     bot = TradingBot(BOT_TOKEN)
     
