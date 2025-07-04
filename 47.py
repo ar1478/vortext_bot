@@ -3,14 +3,27 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Callable
 import aiofiles
 import httpx
 import pandas as pd
 import numpy as np
+from collections import defaultdict
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters
+)
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -45,7 +58,23 @@ class TradingBot:
             'apilayer_forex': 'https://api.apilayer.com/fixer',
             'coingecko': 'https://pro-api.coingecko.com/api/v3',
             'solana_rpc': os.environ.get('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com'),
-            'pumpfun': 'https://api.pump.fun/tokens'
+            'pumpfun': 'https://api.pump.fun/tokens',
+            'dexscreener_solana': 'https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112',
+            'coinmarketcap': 'https://pro-api.coinmarketcap.com/v1/cryptocurrency',
+            'birdeye_historical': 'https://public-api.birdeye.so/defi/history_price'
+        }
+        
+        # Add rate limiting
+        self.api_rate_limits = defaultdict(lambda: 0)
+        self.rate_limit_reset = defaultdict(lambda: 0)
+        
+        # Initialize real data sources
+        self.real_data_sources = {
+            'SOL': self.get_solana_price,
+            'ETH': self.get_ethereum_price,
+            'BTC': self.get_bitcoin_price,
+            'USDC': lambda: 1.0,
+            'USDT': lambda: 1.0,
         }
         
         self.setup_handlers()
@@ -55,6 +84,7 @@ class TradingBot:
         handlers = [
             CommandHandler("start", self.start),
             CommandHandler("help", self.help_command),
+            CommandHandler("setup", self.setup),
             CommandHandler("register", self.register),
             CommandHandler("status", self.status),
             CommandHandler("balance", self.balance),
@@ -80,6 +110,8 @@ class TradingBot:
             CommandHandler("market_maker", self.market_maker),
             CommandHandler("defi_opportunities", self.defi_opportunities),
             CommandHandler("whales", self.whale_tracker),
+            CommandHandler("buy", self.buy),
+            CommandHandler("sell", self.sell),
             # Add a general message handler to catch any errors
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler),
             CallbackQueryHandler(self.button_handler)
@@ -88,17 +120,35 @@ class TradingBot:
         for handler in handlers:
             self.app.add_handler(handler)
     
+    async def enforce_rate_limit(self, api_name: str, limit: int = 10, period: int = 60):
+        """Enforce rate limiting for APIs"""
+        current_time = time.time()
+        if current_time > self.rate_limit_reset[api_name]:
+            self.api_rate_limits[api_name] = 0
+            self.rate_limit_reset[api_name] = current_time + period
+        
+        if self.api_rate_limits[api_name] >= limit:
+            wait_time = period - (current_time - self.rate_limit_reset[api_name] + period)
+            logger.warning(f"Rate limited on {api_name}. Waiting {wait_time:.1f}s")
+            await asyncio.sleep(wait_time)
+        
+        self.api_rate_limits[api_name] += 1
+    
     async def message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle regular messages"""
-        message = update.message.text.lower()
-        
-        # Check if message contains token symbols to look up
-        token_pattern = r'\$([a-zA-Z0-9]+)'
-        matches = re.findall(token_pattern, message)
-        
-        if matches:
-            for token in matches[:3]:  # Limit to first 3 tokens
-                await self.quick_token_lookup(update, token.upper())
+        try:
+            message = update.message.text
+            
+            # Check if message contains token symbols to look up
+            token_pattern = r'\$([a-zA-Z0-9]+)'
+            matches = re.findall(token_pattern, message)
+            
+            if matches:
+                for token in matches[:3]:  # Limit to first 3 tokens
+                    await self.quick_token_lookup(update, token.upper())
+        except Exception as e:
+            logger.error(f"Message handler error: {e}")
+            await update.message.reply_text("⚠️ Error processing message. Please try again.")
     
     async def quick_token_lookup(self, update: Update, token: str):
         """Quick token lookup when user mentions a token with $ symbol"""
@@ -106,10 +156,13 @@ class TradingBot:
             price = await self.get_real_time_price(token)
             if price:
                 change = await self.get_price_change(token)
+                change_emoji = "📈" if change >= 0 else "📉"
                 await update.message.reply_text(
-                    f"💰 *{token}*: ${price:.6f} | {change:.2f}%",
+                    f"💰 *{token}*: ${price:.6f} {change_emoji} {change:.2f}%",
                     parse_mode='Markdown'
                 )
+            else:
+                await update.message.reply_text(f"❌ Couldn't find price data for {token}")
         except Exception as e:
             logger.error(f"Quick lookup error: {e}")
     
@@ -127,10 +180,20 @@ class TradingBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(
+        text = (
             "🤖 *Advanced Trading Bot*\n\n"
-            "Real-time Solana, Forex, and DeFi analytics\n\n"
-            "Choose an option or use /help for commands:",
+            "✅ Real-time Solana, Forex, and DeFi analytics\n\n"
+            "🔧 *Setup Guide:*\n"
+            "1. Use /register YOUR_WALLET_ADDRESS\n"
+            "2. Set API keys in environment:\n"
+            "   - BIRDEYE_API_KEY\n"
+            "   - APILAYER_API_KEY\n"
+            "   - COINGECKO_API_KEY\n\n"
+            "Choose an option or use /help for commands:"
+        )
+        
+        await update.message.reply_text(
+            text,
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
@@ -140,18 +203,21 @@ class TradingBot:
         help_text = """
 🤖 *Trading Bot Commands*
 
-*Basic Commands*
-/start - Start the bot
-/help - Show help
-/register <wallet> - Link wallet
+*Essential Setup*
+/register <wallet> - Link your Solana wallet
+/setup - API setup instructions
+
+*Account Management*
 /status - Account status
 /balance - Check SOL balance
 
 *Portfolio Management*
-/portfolio - Show holdings
+/portfolio - Show holdings with real prices
 /watch <token> - Add to watchlist
-/watchlist - View watchlist
-/alert <token> <direction> <price> - Set price alert
+/watchlist - View watchlist with live prices
+/alert <token> <above|below> <price> - Set price alert
+/buy <token> <amount> - Simulate buy
+/sell <token> <amount> - Simulate sell
 
 *Market Analysis*
 /scan - Scan trending tokens
@@ -176,9 +242,37 @@ class TradingBot:
 /whales - Whale transactions
 
 *Quick Lookup*
-You can also type $SYMBOL (e.g. $SOL) to get a quick price check
+Type $SYMBOL (e.g. $SOL) for quick price check
+
+*Troubleshooting*
+If commands don't respond:
+1. Check API keys with /setup
+2. Verify wallet with /register
+3. Use valid token symbols
 """
         await update.message.reply_text(help_text, parse_mode='Markdown')
+    
+    async def setup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Provide API setup instructions"""
+        text = (
+            "🔧 *API Setup Instructions*\n\n"
+            "For full functionality, set these environment variables:\n\n"
+            "1. *Birdeye API* (Solana prices):\n"
+            "   - Get key: https://birdeye.so/\n"
+            "   - Set as BIRDEYE_API_KEY\n\n"
+            "2. *APILayer API* (Forex data):\n"
+            "   - Get key: https://apilayer.com/\n"
+            "   - Set as APILAYER_API_KEY\n\n"
+            "3. *CoinGecko API* (crypto prices):\n"
+            "   - Get key: https://www.coingecko.com/\n"
+            "   - Set as COINGECKO_API_KEY\n\n"
+            f"Current Status:\n"
+            f"Birdeye: {'✅' if self.api_keys['birdeye'] else '❌'}\n"
+            f"APILayer: {'✅' if self.api_keys['apilayer'] else '❌'}\n"
+            f"CoinGecko: {'✅' if self.api_keys['coingecko'] else '❌'}\n\n"
+            "After setting, restart the bot for changes to take effect."
+        )
+        await update.message.reply_text(text, parse_mode='Markdown')
     
     async def register(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Register user with wallet"""
@@ -243,7 +337,7 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     # REAL-TIME DATA FUNCTIONS
     # ========================
     
-    async def get_cached_data(self, cache_key: str, fetch_func, ttl_seconds: int = 60) -> Any:
+    async def get_cached_data(self, cache_key: str, fetch_func: Callable, ttl_seconds: int = 60) -> Any:
         """Get data from cache or fetch it if expired/missing"""
         current_time = datetime.now()
         
@@ -266,69 +360,107 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
             return self.data_cache.get(cache_key)
     
     async def get_real_time_price(self, token: str) -> Optional[float]:
-        """Get real-time price from multiple sources with fallbacks"""
-        # Define fetch functions for different APIs
-        async def fetch_birdeye():
-            headers = {'X-API-KEY': self.api_keys['birdeye']}
-            url = f"{self.apis['birdeye']}/defi/price"
-            params = {'address': token} if len(token) > 10 else {'token_address': token}
-            response = await self.client.get(url, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    return float(data['data']['value'])
-            return None
+        """Get real-time price with enhanced reliability"""
+        # First check real data sources
+        if token in self.real_data_sources:
+            return await self.real_data_sources[token]()
         
-        async def fetch_jupiter():
-            jup_url = f"{self.apis['jupiter']}/price?ids={token}"
-            jup_response = await self.client.get(jup_url)
-            if jup_response.status_code == 200:
-                jup_data = jup_response.json()
-                if 'data' in jup_data and token in jup_data['data']:
-                    return float(jup_data['data'][token]['price'])
-            return None
-        
-        async def fetch_coingecko():
-            if not self.api_keys['coingecko']:
-                return None
-                
-            headers = {'x-cg-pro-api-key': self.api_keys['coingecko']}
-            url = f"{self.apis['coingecko']}/simple/price"
-            params = {'ids': token.lower(), 'vs_currencies': 'usd'}
-            response = await self.client.get(url, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if token.lower() in data and 'usd' in data[token.lower()]:
-                    return float(data[token.lower()]['usd'])
-            return None
-        
+        # Enhanced fetching with multiple fallbacks
         try:
-            # Try Birdeye first
-            price = await fetch_birdeye()
-            if price is not None:
-                return price
+            await self.enforce_rate_limit('birdeye', 30, 60)
+            headers = {'X-API-KEY': self.api_keys['birdeye']}
+            url = f"{self.apis['birdeye']}/public/price"
+            params = {'address': token} if len(token) > 10 else {'symbol': token}
+            response = await self.client.get(url, headers=headers, params=params)
             
-            # Try Jupiter next
-            price = await fetch_jupiter()
-            if price is not None:
-                return price
-            
-            # Try CoinGecko as a last resort
-            price = await fetch_coingecko()
-            if price is not None:
-                return price
-                
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success') and 'data' in data and 'value' in data['data']:
+                    return float(data['data']['value'])
         except Exception as e:
-            logger.error(f"Price fetch error for {token}: {e}")
+            logger.warning(f"Birdeye price error for {token}: {e}")
+        
+        # Fallback to CoinGecko
+        try:
+            await self.enforce_rate_limit('coingecko', 30, 60)
+            if self.api_keys['coingecko']:
+                headers = {'x-cg-pro-api-key': self.api_keys['coingecko']}
+                url = f"{self.apis['coingecko']}/simple/price"
+                params = {'ids': token.lower(), 'vs_currencies': 'usd'}
+                response = await self.client.get(url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if token.lower() in data and 'usd' in data[token.lower()]:
+                        return float(data[token.lower()]['usd'])
+        except Exception as e:
+            logger.warning(f"Coingecko price error for {token}: {e}")
+        
+        # Fallback to DexScreener
+        try:
+            await self.enforce_rate_limit('dexscreener', 30, 60)
+            url = f"{self.apis['dexscreener']}/search?q={token}"
+            response = await self.client.get(url)
             
+            if response.status_code == 200:
+                data = response.json()
+                if 'pairs' in data and len(data['pairs']) > 0:
+                    return float(data['pairs'][0]['priceUsd'])
+        except Exception as e:
+            logger.warning(f"DexScreener price error for {token}: {e}")
+        
         return None
+
+    async def get_solana_price(self) -> float:
+        """Get SOL price from reliable source"""
+        try:
+            url = self.apis['dexscreener_solana']
+            response = await self.client.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                if 'pairs' in data and len(data['pairs']) > 0:
+                    return float(data['pairs'][0]['priceUsd'])
+        except Exception as e:
+            logger.error(f"SOL price error: {e}")
+        return 0.0
+
+    async def get_ethereum_price(self) -> float:
+        """Get ETH price from reliable source"""
+        try:
+            if self.api_keys['coingecko']:
+                headers = {'x-cg-pro-api-key': self.api_keys['coingecko']}
+                url = f"{self.apis['coingecko']}/simple/price"
+                params = {'ids': 'ethereum', 'vs_currencies': 'usd'}
+                response = await self.client.get(url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return float(data['ethereum']['usd'])
+        except Exception as e:
+            logger.error(f"ETH price error: {e}")
+        return 0.0
+
+    async def get_bitcoin_price(self) -> float:
+        """Get BTC price from reliable source"""
+        try:
+            if self.api_keys['coingecko']:
+                headers = {'x-cg-pro-api-key': self.api_keys['coingecko']}
+                url = f"{self.apis['coingecko']}/simple/price"
+                params = {'ids': 'bitcoin', 'vs_currencies': 'usd'}
+                response = await self.client.get(url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return float(data['bitcoin']['usd'])
+        except Exception as e:
+            logger.error(f"BTC price error: {e}")
+        return 0.0
 
     async def get_price_change(self, token: str) -> float:
         """Get 24h price change percentage"""
         try:
             # Try Birdeye
+            await self.enforce_rate_limit('birdeye', 30, 60)
             headers = {'X-API-KEY': self.api_keys['birdeye']}
             url = f"{self.apis['birdeye']}/defi/token_overview"
             params = {'address': token} if len(token) > 10 else {'token_address': token}
@@ -341,6 +473,7 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
                     
             # Fallback to CoinGecko for well-known tokens
             if self.api_keys['coingecko']:
+                await self.enforce_rate_limit('coingecko', 30, 60)
                 headers = {'x-cg-pro-api-key': self.api_keys['coingecko']}
                 url = f"{self.apis['coingecko']}/coins/{token.lower()}/market_chart"
                 params = {'vs_currency': 'usd', 'days': '1'}
@@ -419,11 +552,14 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_pumpfun_tokens(self) -> List[Dict]:
         """Get real-time trending Pump.fun tokens"""
         async def fetch_data():
-            url = f"{self.apis['pumpfun']}/trending"
-            response = await self.client.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                return data.get('tokens', [])[:10]  # Return top 10
+            try:
+                url = f"{self.apis['pumpfun']}/trending"
+                response = await self.client.get(url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get('tokens', [])[:10]  # Return top 10
+            except Exception as e:
+                logger.error(f"Pumpfun fetch error: {e}")
             return []
             
         return await self.get_cached_data("pumpfun_trending", fetch_data, ttl_seconds=300)
@@ -431,14 +567,17 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_birdeye_trending(self, limit: int = 10) -> List[Dict]:
         """Get real-time trending tokens from Birdeye"""
         async def fetch_data():
-            headers = {'X-API-KEY': self.api_keys['birdeye']}
-            url = f"{self.apis['birdeye']}/defi/trending"
-            params = {'limit': limit, 'time_range': '1h'}
-            response = await self.client.get(url, headers=headers, params=params, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    return data['data']
+            try:
+                headers = {'X-API-KEY': self.api_keys['birdeye']}
+                url = f"{self.apis['birdeye']}/defi/trending"
+                params = {'limit': limit, 'time_range': '1h'}
+                response = await self.client.get(url, headers=headers, params=params, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        return data['data']
+            except Exception as e:
+                logger.error(f"Birdeye trending error: {e}")
             return []
             
         return await self.get_cached_data("birdeye_trending", fetch_data, ttl_seconds=300)
@@ -446,34 +585,37 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_forex_rates(self, base: str = 'USD') -> Optional[Dict]:
         """Get real-time forex rates"""
         async def fetch_data():
-            if not self.api_keys['apilayer']:
-                # Return mock data if no API key
-                return {
-                    'success': True,
-                    'timestamp': int(datetime.now().timestamp()),
-                    'base': base,
-                    'date': datetime.now().strftime('%Y-%m-%d'),
-                    'rates': {
-                        'EUR': 0.92,
-                        'GBP': 0.78,
-                        'JPY': 145.23,
-                        'CAD': 1.36,
-                        'AUD': 1.52,
-                        'CHF': 0.89,
-                        'CNY': 7.25,
-                        'HKD': 7.82,
-                        'NZD': 1.67
+            try:
+                if not self.api_keys['apilayer']:
+                    # Return mock data if no API key
+                    return {
+                        'success': True,
+                        'timestamp': int(datetime.now().timestamp()),
+                        'base': base,
+                        'date': datetime.now().strftime('%Y-%m-%d'),
+                        'rates': {
+                            'EUR': 0.92,
+                            'GBP': 0.78,
+                            'JPY': 145.23,
+                            'CAD': 1.36,
+                            'AUD': 1.52,
+                            'CHF': 0.89,
+                            'CNY': 7.25,
+                            'HKD': 7.82,
+                            'NZD': 1.67
+                        }
                     }
-                }
-                
-            headers = {'apikey': self.api_keys['apilayer']}
-            url = f"{self.apis['apilayer_forex']}/latest"
-            params = {'base': base}
-            response = await self.client.get(url, headers=headers, params=params, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    return data
+                    
+                headers = {'apikey': self.api_keys['apilayer']}
+                url = f"{self.apis['apilayer_forex']}/latest"
+                params = {'base': base}
+                response = await self.client.get(url, headers=headers, params=params, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        return data
+            except Exception as e:
+                logger.error(f"Forex fetch error: {e}")
             return None
             
         return await self.get_cached_data(f"forex_{base}", fetch_data, ttl_seconds=3600)
@@ -481,14 +623,17 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_whale_transactions(self) -> List[Dict]:
         """Get real-time whale transactions using Birdeye"""
         async def fetch_data():
-            headers = {'X-API-KEY': self.api_keys['birdeye']}
-            url = f"{self.apis['birdeye']}/defi/transactions"
-            params = {'type': 'large', 'limit': 10}
-            response = await self.client.get(url, headers=headers, params=params, timeout=15)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success') and 'data' in data and 'items' in data['data']:
-                    return data['data']['items'][:5]
+            try:
+                headers = {'X-API-KEY': self.api_keys['birdeye']}
+                url = f"{self.apis['birdeye']}/defi/transactions"
+                params = {'type': 'large', 'limit': 10}
+                response = await self.client.get(url, headers=headers, params=params, timeout=15)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success') and 'data' in data and 'items' in data['data']:
+                        return data['data']['items'][:5]
+            except Exception as e:
+                logger.error(f"Whale transactions error: {e}")
             return []
             
         return await self.get_cached_data("whale_transactions", fetch_data, ttl_seconds=300)
@@ -496,14 +641,17 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_top_gainers(self, limit: int = 10) -> List[Dict]:
         """Get top gainers from Birdeye"""
         async def fetch_data():
-            headers = {'X-API-KEY': self.api_keys['birdeye']}
-            url = f"{self.apis['birdeye']}/defi/top_gainers"
-            params = {'limit': limit, 'time_range': '1h'}
-            response = await self.client.get(url, headers=headers, params=params, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    return data['data']
+            try:
+                headers = {'X-API-KEY': self.api_keys['birdeye']}
+                url = f"{self.apis['birdeye']}/defi/top_gainers"
+                params = {'limit': limit, 'time_range': '1h'}
+                response = await self.client.get(url, headers=headers, params=params, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        return data['data']
+            except Exception as e:
+                logger.error(f"Top gainers fetch error: {e}")
             return []
             
         return await self.get_cached_data("top_gainers", fetch_data, ttl_seconds=300)
@@ -511,11 +659,14 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_bullx_tokens(self) -> List[Dict]:
         """Get trending tokens from BullX (using DexScreener)"""
         async def fetch_data():
-            url = f"{self.apis['dexscreener']}/tokens/new"
-            response = await self.client.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                return data.get('pairs', [])[:10]
+            try:
+                url = f"{self.apis['dexscreener']}/tokens/new"
+                response = await self.client.get(url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get('pairs', [])[:10]
+            except Exception as e:
+                logger.error(f"BullX tokens error: {e}")
             return []
             
         return await self.get_cached_data("bullx_tokens", fetch_data, ttl_seconds=300)
@@ -523,14 +674,17 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
     async def get_token_metadata(self, token: str) -> Dict:
         """Get token metadata from Birdeye"""
         async def fetch_data():
-            headers = {'X-API-KEY': self.api_keys['birdeye']}
-            url = f"{self.apis['birdeye']}/defi/token_overview"
-            params = {'address': token} if len(token) > 10 else {'token_address': token}
-            response = await self.client.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('success'):
-                    return data['data']
+            try:
+                headers = {'X-API-KEY': self.api_keys['birdeye']}
+                url = f"{self.apis['birdeye']}/defi/token_overview"
+                params = {'address': token} if len(token) > 10 else {'token_address': token}
+                response = await self.client.get(url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        return data['data']
+            except Exception as e:
+                logger.error(f"Token metadata error: {e}")
             return {}
             
         return await self.get_cached_data(f"token_metadata_{token}", fetch_data, ttl_seconds=300)
@@ -583,10 +737,13 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
         try:
             wallet_address = self.users_data[user_id]['wallet']
             
-            # For a real portfolio, fetch actual SPL tokens in the wallet
-            # For demo purposes, we'll use a simulated portfolio
+            # Get SOL balance
+            sol_balance = await self.get_sol_balance(wallet_address)
+            
+            # For a real portfolio, we'd fetch actual SPL tokens
+            # For this demo, we'll use a simulated portfolio
             portfolio = {
-                'SOL': {'amount': await self.get_sol_balance(wallet_address)},
+                'SOL': {'amount': sol_balance},
                 'USDC': {'amount': 500},
                 'BONK': {'amount': 100000}
             }
@@ -1809,6 +1966,117 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
             logger.error(f"AI analysis error: {e}")
             await status_message.edit_text("⚠️ Analysis failed")
 
+    async def buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Simulate buy order with real prices"""
+        if len(context.args) < 2:
+            await update.message.reply_text("Usage: /buy <token> <amount>\nExample: /buy SOL 1.5")
+            return
+            
+        token = context.args[0].upper()
+        try:
+            amount = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("Invalid amount. Please use a number.")
+            return
+        
+        user_id = update.effective_user.id
+        if user_id not in self.users_data:
+            await update.message.reply_text("Please /register first")
+            return
+        
+        # Get real-time price
+        price = await self.get_real_time_price(token)
+        if not price:
+            await update.message.reply_text(f"❌ Couldn't get price for {token}")
+            return
+        
+        # Update portfolio
+        if token not in self.users_data[user_id]['portfolio']:
+            self.users_data[user_id]['portfolio'][token] = {
+                'amount': 0.0,
+                'avg_price': 0.0,
+                'total_cost': 0.0
+            }
+            
+        portfolio = self.users_data[user_id]['portfolio'][token]
+        total_cost = amount * price
+        portfolio['amount'] += amount
+        portfolio['total_cost'] += total_cost
+        portfolio['avg_price'] = portfolio['total_cost'] / portfolio['amount']
+        
+        await self.save_user_data()
+        
+        await update.message.reply_text(
+            f"✅ Simulated BUY order executed\n"
+            f"• Token: {token}\n"
+            f"• Amount: {amount:.4f}\n"
+            f"• Price: ${price:.6f}\n"
+            f"• Total: ${total_cost:.2f}\n\n"
+            f"New balance: {portfolio['amount']:.4f} {token}"
+        )
+
+    async def sell(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Simulate sell order with real prices"""
+        if len(context.args) < 2:
+            await update.message.reply_text("Usage: /sell <token> <amount>\nExample: /sell SOL 1.5")
+            return
+            
+        token = context.args[0].upper()
+        try:
+            amount = float(context.args[1])
+        except ValueError:
+            await update.message.reply_text("Invalid amount. Please use a number.")
+            return
+        
+        user_id = update.effective_user.id
+        if user_id not in self.users_data:
+            await update.message.reply_text("Please /register first")
+            return
+        
+        # Check if token exists in portfolio
+        if token not in self.users_data[user_id]['portfolio']:
+            await update.message.reply_text(f"❌ You don't own any {token}")
+            return
+            
+        portfolio = self.users_data[user_id]['portfolio'][token]
+        
+        # Check if user has enough to sell
+        if amount > portfolio['amount']:
+            await update.message.reply_text(
+                f"❌ Insufficient balance. You only have {portfolio['amount']:.4f} {token}"
+            )
+            return
+        
+        # Get real-time price
+        price = await self.get_real_time_price(token)
+        if not price:
+            await update.message.reply_text(f"❌ Couldn't get price for {token}")
+            return
+        
+        # Calculate sale value
+        sale_value = amount * price
+        
+        # Update portfolio
+        portfolio['amount'] -= amount
+        portfolio['total_cost'] -= amount * portfolio['avg_price']
+        
+        # If no more tokens, remove from portfolio
+        if portfolio['amount'] <= 0:
+            del self.users_data[user_id]['portfolio'][token]
+        else:
+            portfolio['avg_price'] = portfolio['total_cost'] / portfolio['amount']
+        
+        await self.save_user_data()
+        
+        await update.message.reply_text(
+            f"✅ Simulated SELL order executed\n"
+            f"• Token: {token}\n"
+            f"• Amount: {amount:.4f}\n"
+            f"• Price: ${price:.6f}\n"
+            f"• Total: ${sale_value:.2f}\n\n"
+            f"New balance: {portfolio['amount']:.4f} {token}" if token in self.users_data[user_id]['portfolio'] else "Position closed"
+        )
+
     # ======================
     # UTILITIES & BACKGROUND
     # ======================
@@ -1869,6 +2137,24 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
             except Exception as e:
                 logger.error(f"Alert monitor error: {e}")
                 await asyncio.sleep(30)
+    
+    async def data_refresh_task(self):
+        """Periodically refresh data"""
+        while True:
+            try:
+                # Clear cache every 5 minutes
+                self.data_cache.clear()
+                self.cache_expiry.clear()
+                logger.info("Cache cleared")
+                
+                # Refresh token list
+                await self.get_birdeye_trending()
+                await self.get_pumpfun_tokens()
+                
+                await asyncio.sleep(300)  # 5 minutes
+            except Exception as e:
+                logger.error(f"Refresh task error: {e}")
+                await asyncio.sleep(60)
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline button presses"""
@@ -1920,8 +2206,17 @@ You can also type $SYMBOL (e.g. $SOL) to get a quick price check
         """Start the bot"""
         await self.load_user_data()
         
+        # Check API availability
+        api_status = []
+        for api, key in self.api_keys.items():
+            status = "✅" if key else "❌"
+            api_status.append(f"{api}: {status}")
+        
+        logger.info("API Status:\n" + "\n".join(api_status))
+        
         # Start background tasks
         asyncio.create_task(self.start_price_monitoring())
+        asyncio.create_task(self.data_refresh_task())
         
         # Initialize the application
         await self.app.initialize()
@@ -1939,6 +2234,14 @@ if __name__ == "__main__":
     if not BOT_TOKEN:
         logging.error("TELEGRAM_TOKEN environment variable not set!")
         exit(1)
+    
+    # Add API key validation
+    required_keys = ['BIRDEYE_API_KEY', 'APILAYER_API_KEY']
+    missing_keys = [key for key in required_keys if not os.environ.get(key)]
+    
+    if missing_keys:
+        logger.error(f"Missing required API keys: {', '.join(missing_keys)}")
+        logger.error("Some features will be limited")
     
     bot = TradingBot(BOT_TOKEN)
     
