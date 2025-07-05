@@ -199,7 +199,8 @@ class TradingBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show help message with all commands"""
-        help_text = """
+        try:
+            help_text = """
 🤖 *Trading Bot Commands*
 
 *Essential Setup*
@@ -249,7 +250,18 @@ If commands don't respond:
 2. Verify wallet with /register
 3. Use valid token symbols
 """
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+            # Split long message if needed
+            if len(help_text) > 4000:
+                part1 = help_text[:4000]
+                part2 = help_text[4000:]
+                await update.message.reply_text(part1, parse_mode='Markdown')
+                await update.message.reply_text(part2, parse_mode='Markdown')
+            else:
+                await update.message.reply_text(help_text, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Help command error: {e}")
+            # Fallback without Markdown
+            await update.message.reply_text(help_text)
     
     async def setup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Provide API setup instructions"""
@@ -2159,6 +2171,31 @@ If commands don't respond:
         """Handle inline button presses"""
         query = update.callback_query
         await query.answer()
+        logger.info(f"Button pressed: {query.data} by {query.from_user.id}")
+        
+        try:
+            # Map button callbacks to actual commands
+            if query.data == "portfolio":
+                await self.portfolio(update, context)
+            elif query.data == "scan":
+                await self.scan_tokens(update, context)
+            elif query.data == "birdeye":
+                await self.birdeye_trending(update, context)
+            elif query.data == "trending":
+                await self.birdeye_trending(update, context)
+            elif query.data == "pumpfun":
+                await self.pumpfun_scan(update, context)
+            elif query.data == "top_gainers":
+                await self.top_gainers(update, context)
+            elif query.data == "forex":
+                await self.forex_rates(update, context)
+            elif query.data == "ai_analysis":
+                await query.message.reply_text("Send /ai_analysis <token> for detailed analysis")
+            else:
+                await query.edit_message_text(text=f"Action '{query.data}' not implemented yet")
+        except Exception as e:
+            logger.error(f"Button handler error: {e}")
+            await query.edit_message_text(text="⚠️ Error processing request")
         
         # Create a new update object for the command handlers
         new_update = Update(
