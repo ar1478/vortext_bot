@@ -2226,7 +2226,6 @@ If commands don't respond:
         # Run until interrupted
         await asyncio.Event().wait()
 
-# Main execution
 if __name__ == "__main__":
     # Get Telegram token from environment variable
     BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -2234,12 +2233,12 @@ if __name__ == "__main__":
         logging.error("TELEGRAM_TOKEN environment variable not set!")
         exit(1)
     
-    # Add API key validation
-   logger.info("Starting bot with configured API keys")
+    # Add API key validation (FIXED INDENTATION BELOW)
+    logger.info("Starting bot with configured API keys")
     if not os.getenv("BIRDEYE_API_KEY"):
-    logger.warning("Birdeye API key not set - some features will be limited")
+        logger.warning("Birdeye API key not set - some features will be limited")
     if not os.getenv("APILAYER_API_KEY"):
-    logger.warning("APILayer key not set - forex features will use mock data")
+        logger.warning("APILayer key not set - forex features will use mock data")
     
     bot = TradingBot(BOT_TOKEN)
     
