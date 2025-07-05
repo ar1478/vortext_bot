@@ -2236,9 +2236,9 @@ if __name__ == "__main__":
     
     # Add API key validation
    logger.info("Starting bot with configured API keys")
-if not os.getenv("BIRDEYE_API_KEY"):
+    if not os.getenv("BIRDEYE_API_KEY"):
     logger.warning("Birdeye API key not set - some features will be limited")
-if not os.getenv("APILAYER_API_KEY"):
+    if not os.getenv("APILAYER_API_KEY"):
     logger.warning("APILayer key not set - forex features will use mock data")
     
     bot = TradingBot(BOT_TOKEN)
